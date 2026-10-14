@@ -18,8 +18,12 @@ type ActiveSection = 'concepts' | 'tutorials' | 'simulator' | 'templates';
 export default function App() {
   const [activeSection, setActiveSection] = useState<ActiveSection>('concepts');
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('kernelpulse_theme');
-    return saved ? saved === 'dark' : true;
+    try {
+      const saved = localStorage.getItem('kernelpulse_theme');
+      return saved ? saved === 'dark' : true;
+    } catch {
+      return true;
+    }
   });
 
   const [completedConcepts, setCompletedConcepts] = useState<string[]>(() => {
@@ -34,9 +38,9 @@ export default function App() {
   const [completedTutorials, setCompletedTutorials] = useState<string[]>(() => {
     try {
       const raw = localStorage.getItem('kernelpulse_completed_tutorials');
-      return raw ? JSON.parse(raw) : [];
+      return raw ? JSON.parse(raw) : ['tut-beg-01-execve'];
     } catch {
-      return [];
+      return ['tut-beg-01-execve'];
     }
   });
 
@@ -116,7 +120,7 @@ export default function App() {
                 : 'hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            Concepts & Flows
+            Concepts &amp; Flows
           </a>
           <a
             href="#tutorials"
@@ -165,6 +169,7 @@ export default function App() {
         {/* Zone 3: 1 primary action button */}
         <div className="flex items-center shrink-0">
           <button
+            type="button"
             onClick={() => setActiveSection('simulator')}
             className="px-4 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 rounded-lg transition-colors whitespace-nowrap shrink-0"
           >
@@ -190,6 +195,7 @@ export default function App() {
 
           <div className="flex items-center gap-3">
             <button
+              type="button"
               onClick={() => setIsDarkMode(!isDarkMode)}
               className="flex items-center gap-1.5 px-3 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:border-slate-400 transition-colors whitespace-nowrap shrink-0"
             >
@@ -207,6 +213,7 @@ export default function App() {
             </button>
 
             <button
+              type="button"
               onClick={() => {
                 setCompletedConcepts([]);
                 setCompletedTutorials([]);
@@ -237,7 +244,9 @@ export default function App() {
             selectedTutorialId={selectedTutorialId}
             onSelectTutorial={setSelectedTutorialId}
             completedTutorials={completedTutorials}
+            completedTutorialIds={completedTutorials}
             onToggleTutorialComplete={handleToggleTutorialComplete}
+            onToggleCompleteTutorial={handleToggleTutorialComplete}
             onOpenSimulatorPreset={handleOpenSimulatorPreset}
           />
         )}
@@ -260,18 +269,18 @@ export default function App() {
       <footer className="border-t border-slate-200 dark:border-slate-800 mt-16 py-6 px-6 text-xs text-slate-500 dark:text-slate-400">
         <div className="max-w-[1400px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
           <div>
-            KernelPulse — Complete Interactive eBPF Encyclopedia, Tracing Curriculum & Kernel Simulator
+            KernelPulse — Complete Interactive eBPF Encyclopedia, Tracing Curriculum &amp; Kernel Simulator
           </div>
           <div className="flex items-center gap-4">
-            <button onClick={() => setActiveSection('concepts')} className="hover:underline">
-              10 Concept Chapters
+            <button type="button" onClick={() => setActiveSection('concepts')} className="hover:underline">
+              {CONCEPT_TOPICS.length} Concept Chapters
             </button>
             <span aria-hidden="true">·</span>
-            <button onClick={() => setActiveSection('tutorials')} className="hover:underline">
-              15 Step-by-Step Labs
+            <button type="button" onClick={() => setActiveSection('tutorials')} className="hover:underline">
+              {TUTORIAL_LESSONS.length} Step-by-Step Labs
             </button>
             <span aria-hidden="true">·</span>
-            <button onClick={() => setActiveSection('templates')} className="hover:underline">
+            <button type="button" onClick={() => setActiveSection('templates')} className="hover:underline">
               6 Production Templates
             </button>
           </div>

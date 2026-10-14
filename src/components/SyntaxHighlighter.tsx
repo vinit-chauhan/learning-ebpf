@@ -5,8 +5,10 @@ interface SyntaxHighlighterProps {
   code: string;
   language: 'c' | 'go' | 'bpf-asm' | 'makefile' | 'dockerfile';
   title?: string;
+  subtitle?: string;
   badgeText?: string;
   highlightRange?: [number, number] | null;
+  highlightedLines?: number[];
   errorLineNumber?: number | null;
   errorMessage?: string | null;
   onLineClick?: (lineNumber: number) => void;
@@ -144,8 +146,10 @@ export const SyntaxHighlighter: React.FC<SyntaxHighlighterProps> = ({
   code,
   language,
   title,
+  subtitle,
   badgeText,
   highlightRange,
+  highlightedLines,
   errorLineNumber,
   errorMessage,
   onLineClick,
@@ -154,6 +158,7 @@ export const SyntaxHighlighter: React.FC<SyntaxHighlighterProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const lines = code.split('\n');
+  const effectiveBadge = badgeText || subtitle;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code);
@@ -167,10 +172,10 @@ export const SyntaxHighlighter: React.FC<SyntaxHighlighterProps> = ({
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-900/90">
           <div className="flex items-center gap-2 text-xs font-mono text-slate-700 dark:text-slate-300">
             <span className="font-semibold">{title}</span>
-            {badgeText && (
+            {effectiveBadge && (
               <>
                 <span aria-hidden="true" className="text-slate-400">·</span>
-                <span className="text-slate-500 dark:text-slate-400">{badgeText}</span>
+                <span className="text-slate-500 dark:text-slate-400">{effectiveBadge}</span>
               </>
             )}
           </div>
@@ -198,7 +203,8 @@ export const SyntaxHighlighter: React.FC<SyntaxHighlighterProps> = ({
         {lines.map((line, idx) => {
           const lineNum = idx + 1;
           const isHighlighted =
-            highlightRange && lineNum >= highlightRange[0] && lineNum <= highlightRange[1];
+            (highlightRange && lineNum >= highlightRange[0] && lineNum <= highlightRange[1]) ||
+            (highlightedLines && highlightedLines.includes(lineNum));
           const isErrorLine = errorLineNumber === lineNum;
           const isSelected = selectedLine === lineNum;
           const tokens = tokenizeLine(line, language);

@@ -15,8 +15,10 @@ import { SyntaxHighlighter } from './SyntaxHighlighter';
 interface TutorialsViewProps {
   selectedTutorialId: string;
   onSelectTutorial: (tutorialId: string) => void;
-  completedTutorialIds: string[];
-  onToggleCompleteTutorial: (tutorialId: string) => void;
+  completedTutorials?: string[];
+  completedTutorialIds?: string[];
+  onToggleTutorialComplete?: (tutorialId: string) => void;
+  onToggleCompleteTutorial?: (tutorialId: string) => void;
   onOpenSimulatorPreset: (presetId: string) => void;
 }
 
@@ -44,10 +46,16 @@ function expandRange(range: [number, number]): number[] {
 export const TutorialsView: React.FC<TutorialsViewProps> = ({
   selectedTutorialId,
   onSelectTutorial,
+  completedTutorials,
   completedTutorialIds,
+  onToggleTutorialComplete,
   onToggleCompleteTutorial,
   onOpenSimulatorPreset
 }) => {
+  const completedIds = completedTutorials ?? completedTutorialIds ?? [];
+  const handleToggleComplete =
+    onToggleTutorialComplete ?? onToggleCompleteTutorial ?? (() => {});
+
   const [tierFilter, setTierFilter] = useState<'all' | SkillTier>('all');
   const [activeStepIndex, setActiveStepIndex] = useState<number>(0);
   const [challengeMode, setChallengeMode] = useState<'buggy' | 'fixed'>('buggy');
@@ -71,7 +79,7 @@ export const TutorialsView: React.FC<TutorialsViewProps> = ({
 
   const cHighlightedLines = expandRange(currentStep.cHighlightLines);
   const goHighlightedLines = expandRange(currentStep.goHighlightLines);
-  const isCompleted = completedTutorialIds.includes(activeLesson.id);
+  const isCompleted = completedIds.includes(activeLesson.id);
 
   return (
     <div className="space-y-6">
@@ -122,7 +130,7 @@ export const TutorialsView: React.FC<TutorialsViewProps> = ({
         <div className="lg:col-span-3 space-y-2">
           {filteredLessons.map((lesson) => {
             const isSelected = lesson.id === activeLesson.id;
-            const done = completedTutorialIds.includes(lesson.id);
+            const done = completedIds.includes(lesson.id);
 
             return (
               <button
@@ -184,7 +192,7 @@ export const TutorialsView: React.FC<TutorialsViewProps> = ({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => onToggleCompleteTutorial(activeLesson.id)}
+                  onClick={() => handleToggleComplete(activeLesson.id)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
                     isCompleted
                       ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
