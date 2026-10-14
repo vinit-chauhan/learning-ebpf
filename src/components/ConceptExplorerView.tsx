@@ -132,6 +132,7 @@ export const ConceptExplorerView: React.FC<ConceptExplorerViewProps> = ({
   const [activeArchNodeId, setActiveArchNodeId] = useState<string>(ARCH_NODES[2].id);
   const [activeSectionTab, setActiveSectionTab] = useState<'all' | 'what' | 'how' | 'why'>('all');
   const [quizAnswers, setQuizAnswers] = useState<Record<string, number>>({});
+  const [showMobileChapterList, setShowMobileChapterList] = useState<boolean>(false);
 
   const filteredTopics = CONCEPT_TOPICS.filter((t) => {
     const matchesCat = selectedCategory === 'All' || t.category === selectedCategory;
@@ -278,10 +279,67 @@ export const ConceptExplorerView: React.FC<ConceptExplorerViewProps> = ({
         </div>
       </div>
 
+      {/* Mobile Quick Chapter Switcher Bar (Visible only on mobile < lg) */}
+      <div className="lg:hidden p-3.5 border border-sky-500/30 bg-sky-50/50 dark:bg-sky-950/20 rounded-xl">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] font-mono uppercase text-sky-600 dark:text-sky-400">
+              Active Chapter {activeTopic.index} of {CONCEPT_TOPICS.length} · {activeTopic.readTime}
+            </div>
+            <div className="text-xs font-semibold text-slate-900 dark:text-white truncate">
+              {activeTopic.title}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowMobileChapterList(!showMobileChapterList)}
+            className="min-h-[44px] px-3 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 flex items-center gap-1.5 shrink-0 shadow-xs cursor-pointer"
+          >
+            <span>{showMobileChapterList ? 'Hide Chapters' : 'Switch Chapter'}</span>
+          </button>
+        </div>
+
+        {/* Expandable Mobile Chapter List */}
+        {showMobileChapterList && (
+          <div className="mt-3 space-y-1.5 max-h-[320px] overflow-y-auto p-1.5 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-900">
+            {filteredTopics.map((topic) => {
+              const isSelected = topic.id === activeTopic.id;
+              const done = completedConcepts.includes(topic.id);
+              return (
+                <button
+                  key={topic.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveTopicId(topic.id);
+                    setShowMobileChapterList(false);
+                  }}
+                  className={`w-full min-h-[44px] text-left p-2.5 rounded-lg border transition-all flex items-center justify-between gap-2 cursor-pointer ${
+                    isSelected
+                      ? 'border-sky-500 bg-sky-50 dark:bg-sky-950/40 text-sky-600 dark:text-sky-400 font-semibold shadow-xs'
+                      : 'border-transparent hover:border-slate-200 dark:hover:border-slate-700 text-slate-800 dark:text-slate-200'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium truncate">
+                      Chapter {topic.index}: {topic.title}
+                    </div>
+                    <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                      {topic.category} · {topic.readTime}
+                    </div>
+                  </div>
+                  {done && <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Main Encyclopedia Split Layout: Sidebar Chapters + Deep-Dive Reader */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        {/* Left Chapter List (4 cols) */}
-        <div className="lg:col-span-4 space-y-2">
+        {/* Left Chapter List (4 cols on desktop, hidden on mobile) */}
+        <div className="hidden lg:block lg:col-span-4 space-y-2 max-h-[1200px] overflow-y-auto pr-1">
           <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 px-1 mb-2">
             Concept Reference Chapters ({filteredTopics.length})
           </div>

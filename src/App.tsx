@@ -4,7 +4,17 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Moon, Sun, RotateCcw } from 'lucide-react';
+import {
+  Moon,
+  Sun,
+  RotateCcw,
+  Menu,
+  Compass,
+  BookOpen,
+  GraduationCap,
+  Terminal,
+  Cpu
+} from 'lucide-react';
 import { ConceptExplorerView } from './components/ConceptExplorerView';
 import { TutorialsView } from './components/TutorialsView';
 import { KernelSimulatorView } from './components/KernelSimulatorView';
@@ -12,23 +22,16 @@ import { ProjectTemplatesView } from './components/ProjectTemplatesView';
 import { SyscallsReferenceView } from './components/SyscallsReferenceView';
 import { HelpersReferenceView } from './components/HelpersReferenceView';
 import { MacrosReferenceView } from './components/MacrosReferenceView';
+import { NavigationDrawer, ActiveSection } from './components/NavigationDrawer';
 import { CONCEPT_TOPICS } from './data/conceptsData';
 import { TUTORIAL_LESSONS } from './data/tutorialsData';
 import { SIMULATOR_PRESETS } from './data/simulatorAndTemplatesData';
 import { TRACEABLE_SYSCALLS } from './data/syscallsData';
 import { BPF_HELPERS_CATALOG, EBPF_MACROS_CATALOG } from './data/helpersAndMacrosData';
 
-type ActiveSection =
-  | 'concepts'
-  | 'tutorials'
-  | 'syscalls'
-  | 'helpers'
-  | 'macros'
-  | 'simulator'
-  | 'templates';
-
 export default function App() {
   const [activeSection, setActiveSection] = useState<ActiveSection>('concepts');
+  const [isNavDrawerOpen, setIsNavDrawerOpen] = useState<boolean>(false);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('kernelpulse_theme');
@@ -113,23 +116,56 @@ export default function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#0B0F17] text-slate-900 dark:text-slate-100 transition-colors">
-      {/* Top Navigation Bar */}
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-4 px-6 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-[#0B0F17]/95 backdrop-blur-xs">
-        {/* Zone 1: Single text element wordmark */}
-        <a
-          href="#concepts"
-          onClick={(e) => {
-            e.preventDefault();
-            setActiveSection('concepts');
-          }}
-          className="text-lg font-bold tracking-tight text-slate-900 dark:text-white font-display whitespace-nowrap shrink-0"
-        >
-          KernelPulse
-        </a>
+    <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#0B0F17] text-slate-900 dark:text-slate-100 transition-colors pb-16 md:pb-0">
+      {/* Navigation Drawer for Tabs across Mobile & Desktop */}
+      <NavigationDrawer
+        isOpen={isNavDrawerOpen}
+        onClose={() => setIsNavDrawerOpen(false)}
+        activeSection={activeSection}
+        onSelectSection={setActiveSection}
+        isDarkMode={isDarkMode}
+        onToggleTheme={() => setIsDarkMode(!isDarkMode)}
+        completedConceptsCount={completedConcepts.length}
+        completedTutorialsCount={completedTutorials.length}
+        onResetProgress={() => {
+          setCompletedConcepts([]);
+          setCompletedTutorials([]);
+        }}
+        onLaunchSimulator={() => handleOpenSimulatorPreset(selectedPresetId)}
+      />
 
-        {/* Zone 2: Navigation tabs including dedicated tabs for Syscalls, BPF Helpers, and eBPF Macros */}
-        <nav className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm font-medium text-slate-600 dark:text-slate-300 overflow-x-auto py-1">
+      {/* Top Header Bar */}
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-2 sm:gap-4 px-3 sm:px-6 py-2.5 sm:py-3.5 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-[#0B0F17]/95 backdrop-blur-xs">
+        {/* Left Slot: Hamburger Button (active in BOTH mobile and desktop) + Wordmark */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          <button
+            type="button"
+            onClick={() => setIsNavDrawerOpen(true)}
+            aria-label="Open tabs navigation menu"
+            className="min-h-[44px] min-w-[44px] px-2.5 py-1.5 flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 hover:text-sky-600 dark:hover:text-sky-400 hover:border-sky-500/40 hover:bg-sky-500/10 transition-colors cursor-pointer"
+            title="Open Menu (All Tabs & Curriculum)"
+          >
+            <Menu className="w-5 h-5 shrink-0" />
+            <span className="text-xs font-mono font-medium hidden sm:inline">Menu</span>
+          </button>
+
+          <a
+            href="#concepts"
+            onClick={(e) => {
+              e.preventDefault();
+              setActiveSection('concepts');
+            }}
+            className="text-base sm:text-lg font-bold tracking-tight text-slate-900 dark:text-white font-display whitespace-nowrap shrink-0"
+          >
+            KernelPulse
+          </a>
+        </div>
+
+        {/* Center Slot: Horizontal scrollable tab list for quick switching */}
+        <nav
+          aria-label="Quick section navigation"
+          className="flex items-center gap-1 sm:gap-1.5 text-xs sm:text-sm font-medium text-slate-600 dark:text-slate-300 overflow-x-auto py-1 scrollbar-none"
+        >
           {navItems.map((item) => {
             const isActive = activeSection === item.id;
             return (
@@ -137,7 +173,7 @@ export default function App() {
                 key={item.id}
                 type="button"
                 onClick={() => setActiveSection(item.id)}
-                className={`px-2.5 py-1.5 rounded-md transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                className={`min-h-[38px] px-2.5 py-1 rounded-md transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer text-xs ${
                   isActive
                     ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400 font-semibold border border-sky-500/40'
                     : 'hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/50 dark:hover:bg-slate-800/60 border border-transparent'
@@ -160,12 +196,22 @@ export default function App() {
           })}
         </nav>
 
-        {/* Zone 3: 1 primary action button */}
-        <div className="hidden xl:flex items-center shrink-0">
+        {/* Right Slot: Quick actions (Theme switch & Simulator launch) */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setIsDarkMode(!isDarkMode)}
+            aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            title={isDarkMode ? 'Light Mode' : 'Dark Mode'}
+          >
+            {isDarkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-700" />}
+          </button>
+
           <button
             type="button"
             onClick={() => setActiveSection('simulator')}
-            className="px-3.5 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="hidden lg:flex min-h-[44px] items-center px-3.5 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Launch Simulator
           </button>
@@ -173,41 +219,32 @@ export default function App() {
       </header>
 
       {/* Workspace Context Bar: Curriculum Summary, Light/Dark Mode Toggle & Progress Reset */}
-      <div className="border-b border-slate-200 dark:border-slate-800 bg-slate-100/70 dark:bg-[#111827]/70 px-6 py-2.5">
-        <div className="max-w-[1400px] mx-auto flex flex-wrap items-center justify-between gap-4 text-xs">
+      <div className="border-b border-slate-200 dark:border-slate-800 bg-slate-100/70 dark:bg-[#111827]/70 px-3 sm:px-6 py-2.5">
+        <div className="max-w-[1400px] mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2 text-slate-600 dark:text-slate-400 font-mono tabular-nums">
-            <span>Go (cilium/ebpf) + Kernel C Academy</span>
+            <span className="font-semibold text-slate-800 dark:text-slate-200">Go + Kernel C Academy</span>
             <span aria-hidden="true">·</span>
             <span>
-              Concepts Read: <strong className="text-slate-900 dark:text-white">{completedConcepts.length}/{CONCEPT_TOPICS.length}</strong>
+              Concepts: <strong className="text-slate-900 dark:text-white">{completedConcepts.length}/{CONCEPT_TOPICS.length}</strong>
             </span>
             <span aria-hidden="true">·</span>
             <span>
-              Tutorials Completed: <strong className="text-slate-900 dark:text-white">{completedTutorials.length}/{TUTORIAL_LESSONS.length}</strong>
+              Labs: <strong className="text-slate-900 dark:text-white">{completedTutorials.length}/{TUTORIAL_LESSONS.length}</strong>
             </span>
-            <span aria-hidden="true">·</span>
-            <span>
-              Reference Docs: <strong className="text-slate-900 dark:text-white">{TRACEABLE_SYSCALLS.length} Syscalls · {BPF_HELPERS_CATALOG.length} Helpers · {EBPF_MACROS_CATALOG.length} Macros</strong>
+            <span aria-hidden="true" className="hidden sm:inline">·</span>
+            <span className="hidden sm:inline">
+              Ref: <strong className="text-slate-900 dark:text-white">{TRACEABLE_SYSCALLS.length} Syscalls · {BPF_HELPERS_CATALOG.length} Helpers · {EBPF_MACROS_CATALOG.length} Macros</strong>
             </span>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
             <button
               type="button"
-              onClick={() => setIsDarkMode(!isDarkMode)}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:border-slate-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              onClick={() => setIsNavDrawerOpen(true)}
+              className="min-h-[38px] px-2.5 py-1 text-xs font-mono text-sky-600 dark:text-sky-400 hover:underline flex items-center gap-1 cursor-pointer"
             >
-              {isDarkMode ? (
-                <>
-                  <Sun className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Light Mode</span>
-                </>
-              ) : (
-                <>
-                  <Moon className="w-3.5 h-3.5 text-slate-700" />
-                  <span>Dark Mode</span>
-                </>
-              )}
+              <Compass className="w-3.5 h-3.5" />
+              <span>Browse All Tabs</span>
             </button>
 
             <button
@@ -216,18 +253,18 @@ export default function App() {
                 setCompletedConcepts([]);
                 setCompletedTutorials([]);
               }}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="min-h-[38px] px-2.5 py-1 text-slate-500 hover:text-slate-900 dark:hover:text-white flex items-center gap-1 transition-colors cursor-pointer text-xs"
               title="Reset saved learning progress"
             >
               <RotateCcw className="w-3 h-3" />
-              <span>Reset Progress</span>
+              <span>Reset</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* Main Content Container (1440px Desktop Presence) */}
-      <main className="max-w-[1400px] mx-auto px-6 py-8">
+      {/* Main Content Container (1440px Desktop Presence + Mobile Clearance) */}
+      <main className="max-w-[1400px] mx-auto px-3 sm:px-6 pt-4 pb-24 md:py-8">
         {activeSection === 'concepts' && (
           <ConceptExplorerView
             completedConcepts={completedConcepts}
@@ -304,6 +341,73 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Mobile Ergonomic Fixed Bottom Tab Bar (Pattern 1) */}
+      <nav
+        aria-label="Mobile Bottom Navigation"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-[#0B0F17]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 grid grid-cols-5 items-center h-15 px-1 shadow-lg"
+      >
+        <button
+          type="button"
+          onClick={() => setActiveSection('concepts')}
+          className={`flex flex-col items-center justify-center min-h-[44px] py-1 transition-colors cursor-pointer ${
+            activeSection === 'concepts'
+              ? 'text-sky-600 dark:text-sky-400 font-semibold'
+              : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" />
+          <span className="text-[10px] tracking-tight mt-0.5">Concepts</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSection('tutorials')}
+          className={`flex flex-col items-center justify-center min-h-[44px] py-1 transition-colors cursor-pointer ${
+            activeSection === 'tutorials'
+              ? 'text-sky-600 dark:text-sky-400 font-semibold'
+              : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <GraduationCap className="w-4 h-4" />
+          <span className="text-[10px] tracking-tight mt-0.5">Tutorials</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSection('syscalls')}
+          className={`flex flex-col items-center justify-center min-h-[44px] py-1 transition-colors cursor-pointer ${
+            activeSection === 'syscalls'
+              ? 'text-sky-600 dark:text-sky-400 font-semibold'
+              : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <Terminal className="w-4 h-4" />
+          <span className="text-[10px] tracking-tight mt-0.5">Syscalls</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSection('simulator')}
+          className={`flex flex-col items-center justify-center min-h-[44px] py-1 transition-colors cursor-pointer ${
+            activeSection === 'simulator'
+              ? 'text-sky-600 dark:text-sky-400 font-semibold'
+              : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <Cpu className="w-4 h-4" />
+          <span className="text-[10px] tracking-tight mt-0.5">Simulator</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setIsNavDrawerOpen(true)}
+          className="flex flex-col items-center justify-center min-h-[44px] py-1 text-slate-500 dark:text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 transition-colors cursor-pointer"
+        >
+          <Menu className="w-4 h-4" />
+          <span className="text-[10px] tracking-tight mt-0.5 font-medium">All Tabs</span>
+        </button>
+      </nav>
     </div>
   );
 }

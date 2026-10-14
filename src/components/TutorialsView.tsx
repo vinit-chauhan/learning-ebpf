@@ -60,6 +60,7 @@ export const TutorialsView: React.FC<TutorialsViewProps> = ({
   const [activeStepIndex, setActiveStepIndex] = useState<number>(0);
   const [challengeMode, setChallengeMode] = useState<'buggy' | 'fixed'>('buggy');
   const [showConceptGuide, setShowConceptGuide] = useState<boolean>(true);
+  const [showMobileList, setShowMobileList] = useState<boolean>(false);
 
   const activeLesson: TutorialLesson =
     TUTORIAL_LESSONS.find((t) => t.id === selectedTutorialId) || TUTORIAL_LESSONS[0];
@@ -81,19 +82,23 @@ export const TutorialsView: React.FC<TutorialsViewProps> = ({
   const goHighlightedLines = expandRange(currentStep.goHighlightLines);
   const isCompleted = completedIds.includes(activeLesson.id);
 
+  const beginnerCount = TUTORIAL_LESSONS.filter((l) => l.tier === 'beginner').length;
+  const intermediateCount = TUTORIAL_LESSONS.filter((l) => l.tier === 'intermediate').length;
+  const advancedCount = TUTORIAL_LESSONS.filter((l) => l.tier === 'advanced').length;
+
   return (
     <div className="space-y-6">
       {/* Header & Skill Tier Filter Bar */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6">
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 sm:p-6">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <div className="text-xs font-medium text-sky-600 dark:text-sky-400">
-              Guided Tracing Curriculum · 15 Labs Across Beginner, Mid-Level & Advanced
+            <div className="text-xs font-medium text-sky-600 dark:text-sky-400 font-mono">
+              Guided Tracing Curriculum · {TUTORIAL_LESSONS.length} Labs Across Beginner, Mid-Level &amp; Advanced
             </div>
-            <h1 className="text-2xl sm:text-3xl font-semibold text-slate-900 dark:text-slate-100 mt-1">
-              Step-by-Step eBPF Tracing & Networking Tutorials (C + Go)
+            <h1 className="text-xl sm:text-2xl md:text-3xl font-semibold text-slate-900 dark:text-slate-100 mt-1">
+              Step-by-Step eBPF Tracing &amp; Networking Tutorials (C + Go)
             </h1>
-            <p className="text-sm text-slate-600 dark:text-slate-400 mt-1 max-w-3xl">
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 mt-1 max-w-3xl">
               Master kernel C probes paired with idiomatic Go (<code className="font-mono text-xs">github.com/cilium/ebpf</code>) loaders. Each lab includes a concept deep-dive, synchronized code-to-kernel checkpoints, and an interactive Verifier debugging challenge.
             </p>
           </div>
@@ -101,17 +106,17 @@ export const TutorialsView: React.FC<TutorialsViewProps> = ({
           <div className="flex items-center gap-1.5 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 shrink-0 overflow-x-auto">
             {(
               [
-                { id: 'all', label: 'All 15 Tutorials' },
-                { id: 'beginner', label: 'Beginner (5)' },
-                { id: 'intermediate', label: 'Mid-Level (5)' },
-                { id: 'advanced', label: 'Advanced (5)' }
+                { id: 'all', label: `All (${TUTORIAL_LESSONS.length})` },
+                { id: 'beginner', label: `Beginner (${beginnerCount})` },
+                { id: 'intermediate', label: `Mid-Level (${intermediateCount})` },
+                { id: 'advanced', label: `Advanced (${advancedCount})` }
               ] as const
             ).map((tab) => (
               <button
                 key={tab.id}
                 type="button"
                 onClick={() => setTierFilter(tab.id)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                className={`min-h-[38px] px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   tierFilter === tab.id
                     ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -122,12 +127,70 @@ export const TutorialsView: React.FC<TutorialsViewProps> = ({
             ))}
           </div>
         </div>
+
+        {/* Mobile Quick Lab Switcher (Visible only on mobile < lg) */}
+        <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-800 lg:hidden">
+          <div className="flex items-center justify-between gap-2 p-3 rounded-lg border border-sky-500/30 bg-sky-50/50 dark:bg-sky-950/20">
+            <div className="min-w-0 flex-1">
+              <div className="text-[10px] font-mono uppercase text-sky-600 dark:text-sky-400">
+                Active Lab {activeLesson.index} of {TUTORIAL_LESSONS.length}
+              </div>
+              <div className="text-xs font-semibold text-slate-900 dark:text-white truncate">
+                {activeLesson.title}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowMobileList(!showMobileList)}
+              className="min-h-[44px] px-3 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 flex items-center gap-1.5 shrink-0 shadow-xs cursor-pointer"
+            >
+              <span>{showMobileList ? 'Hide Labs' : 'Switch Lab'}</span>
+            </button>
+          </div>
+
+          {/* Expandable Mobile Lab Selector List */}
+          {showMobileList && (
+            <div className="mt-2 space-y-1.5 max-h-[320px] overflow-y-auto p-1.5 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-900">
+              {filteredLessons.map((lesson) => {
+                const isSelected = lesson.id === activeLesson.id;
+                const done = completedIds.includes(lesson.id);
+
+                return (
+                  <button
+                    key={lesson.id}
+                    type="button"
+                    onClick={() => {
+                      onSelectTutorial(lesson.id);
+                      setShowMobileList(false);
+                    }}
+                    className={`w-full min-h-[44px] text-left p-2.5 rounded-lg border transition-all flex items-center justify-between gap-2 cursor-pointer ${
+                      isSelected
+                        ? 'border-sky-500 bg-white dark:bg-slate-800 text-sky-600 dark:text-sky-400 font-semibold shadow-xs'
+                        : 'border-transparent hover:border-slate-200 dark:hover:border-slate-700 hover:bg-white dark:hover:bg-slate-800/60 text-slate-800 dark:text-slate-200'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="text-xs font-mono font-medium truncate">
+                        Lab {lesson.index}: {lesson.title}
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                        {lesson.tier} · {lesson.hookType} · {lesson.duration}
+                      </div>
+                    </div>
+                    {done && <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Main Layout: Left Curriculum Sidebar (3 cols) + Right Interactive Lab Studio (9 cols) */}
+      {/* Main Layout: Left Curriculum Sidebar (3 cols on desktop) + Right Interactive Lab Studio (9 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Sidebar: 15 Tutorials List */}
-        <div className="lg:col-span-3 space-y-2">
+        {/* Left Sidebar: 21 Tutorials List (Always visible on desktop, hidden on mobile) */}
+        <div className="hidden lg:block lg:col-span-3 space-y-2 max-h-[1200px] overflow-y-auto pr-1">
           {filteredLessons.map((lesson) => {
             const isSelected = lesson.id === activeLesson.id;
             const done = completedIds.includes(lesson.id);
@@ -137,7 +200,7 @@ export const TutorialsView: React.FC<TutorialsViewProps> = ({
                 key={lesson.id}
                 type="button"
                 onClick={() => onSelectTutorial(lesson.id)}
-                className={`w-full text-left p-3.5 rounded-xl border transition-all ${
+                className={`w-full text-left p-3.5 rounded-xl border transition-all cursor-pointer ${
                   isSelected
                     ? 'border-sky-500 bg-white dark:bg-slate-900 shadow-xs'
                     : 'border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-900/50 hover:border-slate-300 dark:hover:border-slate-700'

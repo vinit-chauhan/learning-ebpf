@@ -255,12 +255,12 @@ export const KernelSimulatorView: React.FC<KernelSimulatorViewProps> = ({
     <div className="space-y-6">
       {/* Top Preset Selector Strip */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full">
           {SIMULATOR_PRESETS.map((preset) => (
             <button
               key={preset.id}
               onClick={() => onSelectPreset(preset.id)}
-              className={`px-3.5 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+              className={`min-h-[40px] px-3.5 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 preset.id === activePreset.id
                   ? 'border-sky-500 bg-sky-500/12 text-slate-900 dark:text-white font-semibold'
                   : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -272,10 +272,10 @@ export const KernelSimulatorView: React.FC<KernelSimulatorViewProps> = ({
         </div>
 
         {/* Simulation Playback Controls */}
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="flex items-center gap-2 text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 min-h-[40px]">
             <label htmlFor="rate-slider" className="whitespace-nowrap">
-              Event Rate: <strong>{eventRatePerSec} ev/s</strong>
+              Rate: <strong>{eventRatePerSec} ev/s</strong>
             </label>
             <input
               id="rate-slider"
@@ -284,23 +284,23 @@ export const KernelSimulatorView: React.FC<KernelSimulatorViewProps> = ({
               max={15}
               value={eventRatePerSec}
               onChange={(e) => setEventRatePerSec(Number(e.target.value))}
-              className="w-20 accent-sky-500 cursor-pointer"
+              className="w-16 sm:w-20 accent-sky-500 cursor-pointer"
             />
           </div>
 
           <button
             onClick={() => setIsRunning(!isRunning)}
-            className="px-3.5 py-1.5 text-xs font-medium rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 hover:opacity-90 transition-opacity flex items-center gap-1.5 whitespace-nowrap shrink-0"
+            className="min-h-[40px] px-3.5 py-1.5 text-xs font-medium rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 hover:opacity-90 transition-opacity flex items-center gap-1.5 whitespace-nowrap cursor-pointer shadow-2xs"
           >
             {isRunning ? (
               <>
                 <Pause className="w-3.5 h-3.5" />
-                <span>Pause Stream</span>
+                <span>Pause</span>
               </>
             ) : (
               <>
                 <Play className="w-3.5 h-3.5" />
-                <span>Resume Stream</span>
+                <span>Resume</span>
               </>
             )}
           </button>
@@ -308,10 +308,10 @@ export const KernelSimulatorView: React.FC<KernelSimulatorViewProps> = ({
           <button
             onClick={() => triggerSyntheticEvent('normal_http')}
             disabled={!isVerifierPassing}
-            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 flex items-center gap-1 whitespace-nowrap shrink-0"
+            className="min-h-[40px] px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 flex items-center gap-1 whitespace-nowrap cursor-pointer shadow-2xs"
           >
             <FastForward className="w-3.5 h-3.5" />
-            <span>Step Event</span>
+            <span>Step</span>
           </button>
 
           <button
@@ -320,7 +320,8 @@ export const KernelSimulatorView: React.FC<KernelSimulatorViewProps> = ({
               setTotalPassed(0);
               setTotalDropped(0);
             }}
-            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white flex items-center gap-1 whitespace-nowrap shrink-0"
+            className="min-h-[40px] px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white flex items-center gap-1 whitespace-nowrap cursor-pointer"
+            title="Reset telemetry counters"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             <span>Reset</span>
@@ -362,7 +363,11 @@ export const KernelSimulatorView: React.FC<KernelSimulatorViewProps> = ({
             </div>
 
             {/* SVG Animated Kernel Flow Diagram */}
-            <div className="bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg p-4 overflow-x-auto">
+            <div className="bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg p-3 sm:p-4 overflow-x-auto">
+              <div className="text-[10px] font-mono text-slate-500 dark:text-slate-400 sm:hidden mb-2 flex items-center justify-between">
+                <span>Kernel Pipeline Diagram</span>
+                <span>Scroll right to view full pipeline →</span>
+              </div>
               <svg
                 viewBox="0 0 780 145"
                 className="w-full min-w-[640px] h-auto select-none"

@@ -26,6 +26,7 @@ export const MacrosReferenceView: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<'ALL' | EbpfMacroCategory>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMacroId, setSelectedMacroId] = useState<string>(EBPF_MACROS_CATALOG[0].id);
+  const [showMobileMacroList, setShowMobileMacroList] = useState<boolean>(false);
 
   const filteredMacros = useMemo(() => {
     return EBPF_MACROS_CATALOG.filter((m) => {
@@ -121,10 +122,61 @@ export const MacrosReferenceView: React.FC = () => {
         </div>
       </div>
 
+      {/* Mobile Quick Macro Switcher Bar (Visible only on mobile < lg) */}
+      <div className="lg:hidden p-3.5 border border-amber-500/30 bg-amber-500/5 rounded-lg">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] font-mono uppercase text-amber-400">
+              Active Macro · {activeMacro.category}
+            </div>
+            <div className="text-xs font-mono font-bold text-[var(--text-primary)] truncate">
+              {activeMacro.name}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowMobileMacroList(!showMobileMacroList)}
+            className="min-h-[44px] px-3 py-1.5 text-xs font-mono font-semibold border border-amber-500/40 bg-[var(--bg-elevated)] text-amber-400 flex items-center gap-1.5 shrink-0 shadow-xs cursor-pointer"
+          >
+            <span>{showMobileMacroList ? 'Hide Macros' : `Switch (${filteredMacros.length})`}</span>
+          </button>
+        </div>
+
+        {/* Expandable Mobile Macro List */}
+        {showMobileMacroList && (
+          <div className="mt-3 space-y-1.5 max-h-[320px] overflow-y-auto p-1.5 border border-[var(--border-subtle)] bg-[var(--bg-elevated)] rounded">
+            {filteredMacros.map((m) => {
+              const isSelected = m.id === activeMacro.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedMacroId(m.id);
+                    setShowMobileMacroList(false);
+                  }}
+                  className={`w-full min-h-[44px] text-left p-2.5 border transition-all flex items-center justify-between gap-2 cursor-pointer ${
+                    isSelected
+                      ? 'border-amber-500 bg-amber-500/15 text-amber-400 font-bold'
+                      : 'border-transparent hover:border-[var(--border-subtle)] text-[var(--text-primary)]'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="text-xs font-mono font-bold truncate">{m.name}</div>
+                    <div className="text-[10px] font-mono text-[var(--text-muted)] truncate">{m.category}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Main Split View */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Sidebar */}
-        <div className="lg:col-span-3 space-y-1.5 max-h-[1150px] overflow-y-auto pr-1">
+        {/* Left Sidebar (Always visible on desktop, hidden on mobile) */}
+        <div className="hidden lg:block lg:col-span-3 space-y-1.5 max-h-[1150px] overflow-y-auto pr-1">
           {filteredMacros.map((macro) => {
             const isSelected = macro.id === activeMacro.id;
             return (

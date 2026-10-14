@@ -28,6 +28,7 @@ export const HelpersReferenceView: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<'ALL' | BpfHelperCategory>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedHelperId, setSelectedHelperId] = useState<string>(BPF_HELPERS_CATALOG[0].id);
+  const [showMobileHelperList, setShowMobileHelperList] = useState<boolean>(false);
 
   const filteredHelpers = useMemo(() => {
     return BPF_HELPERS_CATALOG.filter((h) => {
@@ -126,10 +127,61 @@ export const HelpersReferenceView: React.FC = () => {
         </div>
       </div>
 
+      {/* Mobile Quick Helper Switcher Bar (Visible only on mobile < lg) */}
+      <div className="lg:hidden p-3.5 border border-emerald-500/30 bg-emerald-500/5 rounded-lg">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] font-mono uppercase text-emerald-400">
+              Active Helper · {activeHelper.minKernel}
+            </div>
+            <div className="text-xs font-mono font-bold text-[var(--text-primary)] truncate">
+              {activeHelper.name}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowMobileHelperList(!showMobileHelperList)}
+            className="min-h-[44px] px-3 py-1.5 text-xs font-mono font-semibold border border-emerald-500/40 bg-[var(--bg-elevated)] text-emerald-400 flex items-center gap-1.5 shrink-0 shadow-xs cursor-pointer"
+          >
+            <span>{showMobileHelperList ? 'Hide Helpers' : `Switch (${filteredHelpers.length})`}</span>
+          </button>
+        </div>
+
+        {/* Expandable Mobile Helper List */}
+        {showMobileHelperList && (
+          <div className="mt-3 space-y-1.5 max-h-[320px] overflow-y-auto p-1.5 border border-[var(--border-subtle)] bg-[var(--bg-elevated)] rounded">
+            {filteredHelpers.map((h) => {
+              const isSelected = h.id === activeHelper.id;
+              return (
+                <button
+                  key={h.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedHelperId(h.id);
+                    setShowMobileHelperList(false);
+                  }}
+                  className={`w-full min-h-[44px] text-left p-2.5 border transition-all flex items-center justify-between gap-2 cursor-pointer ${
+                    isSelected
+                      ? 'border-emerald-500 bg-emerald-500/15 text-emerald-400 font-bold'
+                      : 'border-transparent hover:border-[var(--border-subtle)] text-[var(--text-primary)]'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="text-xs font-mono font-bold truncate">{h.name}</div>
+                    <div className="text-[10px] font-mono text-[var(--text-muted)] truncate">{h.category}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Main Split View */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Sidebar */}
-        <div className="lg:col-span-3 space-y-1.5 max-h-[1150px] overflow-y-auto pr-1">
+        {/* Left Sidebar (Always visible on desktop, hidden on mobile) */}
+        <div className="hidden lg:block lg:col-span-3 space-y-1.5 max-h-[1150px] overflow-y-auto pr-1">
           {filteredHelpers.map((helper) => {
             const isSelected = helper.id === activeHelper.id;
             const kfuncBadge = helper.helperIdOrType.toLowerCase().includes('kfunc');

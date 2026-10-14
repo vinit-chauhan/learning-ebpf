@@ -36,6 +36,7 @@ export const SyscallsReferenceView: React.FC<SyscallsReferenceViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSyscallId, setSelectedSyscallId] = useState<string>(TRACEABLE_SYSCALLS[0].id);
   const [activeCodeTab, setActiveCodeTab] = useState<'both' | 'c' | 'go'>('both');
+  const [showMobileSyscallList, setShowMobileSyscallList] = useState<boolean>(false);
 
   const filteredSyscalls = useMemo(() => {
     return TRACEABLE_SYSCALLS.filter((sc) => {
@@ -145,10 +146,65 @@ export const SyscallsReferenceView: React.FC<SyscallsReferenceViewProps> = ({
         </div>
       </div>
 
+      {/* Mobile Quick Syscall Switcher Bar (Visible only on mobile < lg) */}
+      <div className="lg:hidden p-3.5 border border-cyan-500/30 bg-cyan-500/5 rounded-lg">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] font-mono uppercase text-cyan-400">
+              Active Syscall #{activeSyscall.syscallNumberX86_64} (x86_64)
+            </div>
+            <div className="text-xs font-mono font-bold text-[var(--text-primary)] truncate">
+              {activeSyscall.name}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowMobileSyscallList(!showMobileSyscallList)}
+            className="min-h-[44px] px-3 py-1.5 text-xs font-mono font-semibold border border-cyan-500/40 bg-[var(--bg-elevated)] text-cyan-400 flex items-center gap-1.5 shrink-0 shadow-xs cursor-pointer"
+          >
+            <span>{showMobileSyscallList ? 'Hide Syscalls' : `Switch (${filteredSyscalls.length})`}</span>
+          </button>
+        </div>
+
+        {/* Expandable Mobile Syscall List */}
+        {showMobileSyscallList && (
+          <div className="mt-3 space-y-1.5 max-h-[320px] overflow-y-auto p-1.5 border border-[var(--border-subtle)] bg-[var(--bg-elevated)] rounded">
+            {filteredSyscalls.map((sc) => {
+              const isSelected = sc.id === activeSyscall.id;
+              return (
+                <button
+                  key={sc.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedSyscallId(sc.id);
+                    setShowMobileSyscallList(false);
+                  }}
+                  className={`w-full min-h-[44px] text-left p-2.5 border transition-all flex items-center justify-between gap-2 cursor-pointer ${
+                    isSelected
+                      ? 'border-cyan-500 bg-cyan-500/15 text-cyan-400 font-bold'
+                      : 'border-transparent hover:border-[var(--border-subtle)] text-[var(--text-primary)]'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="text-xs font-mono font-bold truncate">
+                      #{sc.syscallNumberX86_64} {sc.name}
+                    </div>
+                    <div className="text-[10px] font-mono text-[var(--text-muted)] truncate">
+                      {sc.category}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Main Split View: Left Syscall List + Right Deep-Dive Inspector */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Sidebar: Syscall Selector */}
-        <div className="lg:col-span-3 space-y-1.5 max-h-[1200px] overflow-y-auto pr-1">
+        {/* Left Sidebar: Syscall Selector (Always visible on desktop, hidden on mobile) */}
+        <div className="hidden lg:block lg:col-span-3 space-y-1.5 max-h-[1200px] overflow-y-auto pr-1">
           {filteredSyscalls.map((sc) => {
             const isSelected = sc.id === activeSyscall.id;
             return (

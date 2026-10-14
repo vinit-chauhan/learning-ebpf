@@ -169,19 +169,19 @@ export const SyntaxHighlighter: React.FC<SyntaxHighlighterProps> = ({
   return (
     <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden bg-slate-50/80 dark:bg-[#0B0F17]">
       {title && (
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-900/90">
-          <div className="flex items-center gap-2 text-xs font-mono text-slate-700 dark:text-slate-300">
-            <span className="font-semibold">{title}</span>
+        <div className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 border-b border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-900/90">
+          <div className="flex items-center gap-1.5 sm:gap-2 text-xs font-mono text-slate-700 dark:text-slate-300 min-w-0 flex-1">
+            <span className="font-semibold truncate">{title}</span>
             {effectiveBadge && (
               <>
-                <span aria-hidden="true" className="text-slate-400">·</span>
-                <span className="text-slate-500 dark:text-slate-400">{effectiveBadge}</span>
+                <span aria-hidden="true" className="text-slate-400 shrink-0">·</span>
+                <span className="text-slate-500 dark:text-slate-400 truncate hidden xs:inline">{effectiveBadge}</span>
               </>
             )}
           </div>
           <button
             onClick={handleCopy}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded transition-colors whitespace-nowrap shrink-0"
+            className="min-h-[36px] flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
             title="Copy source code"
           >
             {copied ? (
@@ -192,7 +192,7 @@ export const SyntaxHighlighter: React.FC<SyntaxHighlighterProps> = ({
             ) : (
               <>
                 <Copy className="w-3.5 h-3.5" />
-                <span>Copy Code</span>
+                <span>Copy</span>
               </>
             )}
           </button>
