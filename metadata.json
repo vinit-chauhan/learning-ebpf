@@ -1,0 +1,6 @@
+{
+  "name": "KernelPulse — Interactive eBPF Encyclopedia & Kernel Simulator",
+  "description": "Comprehensive interactive learning platform for mastering eBPF with C and Go (cilium/ebpf), featuring a deep-dive concept encyclopedia, 15 step-by-step tracing tutorials, real-world project templates, and a live eBPF verifier and kernel event simulator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
