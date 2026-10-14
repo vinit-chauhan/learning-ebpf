@@ -8,7 +8,10 @@ export type HookCategory =
   | 'tracepoint'
   | 'uprobe'
   | 'lsm'
-  | 'sched';
+  | 'sched'
+  | 'fentry'
+  | 'fexit'
+  | 'cgroup';
 
 export type ConceptCategory =
   | 'Foundations & Architecture'
@@ -199,3 +202,108 @@ export interface ProjectTemplate {
   files: ProjectTemplateFile[];
   simulatorPresetId: string;
 }
+
+export type SyscallCategory =
+  | 'Process & Execution'
+  | 'Filesystem & VFS'
+  | 'Network & Sockets'
+  | 'Memory, Privilege & Security';
+
+export interface SyscallArgumentSpec {
+  argIndex: string;
+  name: string;
+  cType: string;
+  pointerSpace: 'USER_POINTER (__user)' | 'SCALAR / FD' | 'USER_STRUCT_PTR (__user)';
+  helperRequired: string;
+  detailedMeaning: string;
+}
+
+export interface SyscallReferenceItem {
+  id: string;
+  syscallNumberX86_64: number;
+  name: string;
+  category: SyscallCategory;
+  cSignature: string;
+  enterTracepoint: string;
+  exitTracepoint: string;
+  fentryHook: string;
+  lsmAlternative: string;
+  shortSummary: string;
+  whatItDoesInDetail: string[];
+  kernelInternalsAndStructures: string[];
+  howToTraceInEbpf: string[];
+  pointerAndVerifierGotchas: string[];
+  returnValuesAndErrnos: {
+    successMeaning: string;
+    commonErrors: { errno: string; reason: string }[];
+  };
+  arguments: SyscallArgumentSpec[];
+  securityAndObservabilityUseCases: {
+    title: string;
+    scenario: string;
+  }[];
+  cSnippet: string;
+  goSnippet: string;
+  relatedTutorialId?: string;
+}
+
+export type BpfHelperCategory =
+  | 'Process & Task Context'
+  | 'Memory & Pointer Probing'
+  | 'BPF Map Operations'
+  | 'RingBuffer & Telemetry'
+  | 'Networking & Redirection'
+  | 'Timers, Locks & Kfuncs';
+
+export interface BpfHelperReferenceItem {
+  id: string;
+  helperIdOrType: string;
+  name: string;
+  category: BpfHelperCategory;
+  minKernel: string;
+  signature: string;
+  returnValueSpec: string;
+  allowedProgramTypes: string[];
+  shortSummary: string;
+  whatItDoes: string[];
+  howItWorksUnderTheHood: string[];
+  whyUseInsteadOf: {
+    alternative: string;
+    explanation: string;
+  };
+  verifierSafetyContract: string[];
+  registerMapping: {
+    reg: string;
+    meaning: string;
+  }[];
+  cExample: string;
+  goNote: string;
+}
+
+export type EbpfMacroCategory =
+  | 'SEC() Hook Directives'
+  | 'CO-RE Struct Reading Macros'
+  | 'Kprobe & Trampoline Argument Macros'
+  | 'BTF Map Definition & Compiler Macros';
+
+export interface EbpfMacroReferenceItem {
+  id: string;
+  name: string;
+  category: EbpfMacroCategory;
+  headerFile: string;
+  syntax: string;
+  shortSummary: string;
+  whatIsItAndPurpose: string[];
+  underTheHoodExpansion: {
+    whatYouWrite: string;
+    whatCompilerSees: string;
+    explanation: string;
+  };
+  whyUseInsteadOfRawCode: {
+    rawAlternative: string;
+    rationale: string;
+  };
+  verifierAndPortabilityNotes: string[];
+  cAndGoExample: string;
+}
+

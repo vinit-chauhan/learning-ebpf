@@ -1715,6 +1715,824 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";`
     },
     relatedTutorialId: 'tut-adv-04-sockops-mesh',
     simulatorPresetId: 'preset-tcp-latency'
+  },
+
+  {
+    id: 'fentry-fexit-btf-trampolines',
+    index: '13',
+    title: 'fentry & fexit BTF Trampolines vs. Kprobes',
+    subtitle: 'Near-zero overhead direct kernel function trampolines with simultaneous entry+exit argument access.',
+    category: 'Kernel Hook Subsystems',
+    readTime: '11 min read',
+    minKernel: 'Linux 5.5+',
+    summary:
+      'Learn how modern BTF-powered fentry and fexit hooks replace CPU breakpoint interrupts with direct JIT-generated call trampolines—delivering 5–10x lower latency than kprobes and giving fexit simultaneous access to both function inputs and return values.',
+    whatIsIt: {
+      heading: 'What are `fentry` and `fexit` BTF Trampolines?',
+      paragraphs: [
+        'Introduced in Linux 5.5, `fentry` (function entry) and `fexit` (function exit) are modern, BTF-aware replacements for traditional `kprobe` and `kretprobe` hooks. Instead of saving all 15+ CPU registers into a `struct pt_regs` structure via a software breakpoint or kprobe handler, `fentry`/`fexit` dynamically generate a specialized native machine-code bridge called a **BPF Trampoline**.',
+        'Most remarkably, an `fexit` hook receives **both the function’s original input arguments AND its return value simultaneously** in a single eBPF program invocation! With legacy `kretprobe`, only the return value (`PT_REGS_RC`) is available at function exit, forcing developers to maintain an intermediate `BPF_MAP_TYPE_HASH` keyed by `pid_tgid` just to remember what arguments were passed at function entry.',
+        'Furthermore, because `fentry`/`fexit` rely on kernel BTF type signatures, the eBPF Verifier treats pointer arguments (like `struct sock *sk` or `struct file *file`) as trusted `PTR_TO_BTF_ID` pointers—allowing direct C pointer dereferencing (`sk->__sk_common.skc_daddr`) without calling `bpf_probe_read_kernel()`!'
+      ],
+      keyTakeaways: [
+        '`fentry` and `fexit` execute in ~15–25ns (compared to ~100–250ns for `kprobe`/`kretprobe`).',
+        '`SEC("fexit/<fn>")` receives all input parameters PLUS the return value as the final argument inside `BPF_PROG(...)`.',
+        'Pointer arguments are BTF-verified (`PTR_TO_BTF_ID`), enabling direct memory loads without helper function overhead.'
+      ],
+      mentalModelAnalogy:
+        'A kprobe is like stopping a train at a checkpoint, photographing every passenger (all CPU registers into pt_regs), and handing the photo album to an inspector. An fentry/fexit trampoline is a high-speed railway switch that routes just the exact cargo manifest directly into your JITed eBPF function.'
+    },
+    howItWorks: {
+      heading: 'How the Kernel Generates a Native BPF Trampoline',
+      paragraphs: [
+        'Every Linux kernel compiled with `CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS` places a 5-byte `nop` instruction (`0x0f 0x1f 0x44 0x00 0x00` on x86_64) at the very start of every traceable kernel function (`__fentry__`).',
+        'When your Go loader attaches `SEC("fexit/tcp_v4_connect")` via `link.AttachTracing()`, `arch_prepare_bpf_trampoline()` inspects the BTF prototype of `tcp_v4_connect`, allocates an executable page, and emits custom x86_64/ARM64 assembly that copies only the 3 input registers onto a small stack array `u64 ctx[4]`, calls the original `tcp_v4_connect`, stores `%rax` (the return value) into `ctx[3]`, and calls your JITed `fexit` program!'
+      ],
+      lifecycleSteps: [
+        {
+          step: '01',
+          actor: 'USERSPACE',
+          title: 'Go Loader Resolves Target BTF ID',
+          detail: 'cilium/ebpf looks up "tcp_v4_connect" in /sys/kernel/btf/vmlinux and sets AttachBtfId on the ProgramSpec.'
+        },
+        {
+          step: '02',
+          actor: 'VERIFIER',
+          title: 'BTF Pointer Type Tracking',
+          detail: 'The Verifier maps ctx[0] to PTR_TO_BTF_ID (struct sock *), allowing direct C field reads.'
+        },
+        {
+          step: '03',
+          actor: 'KERNEL_HOOK',
+          title: '5-Byte NOP Patched to Call Trampoline',
+          detail: 'ftrace atomically patches the 5-byte nop at tcp_v4_connect entry into a direct call to the custom BPF trampoline.'
+        },
+        {
+          step: '04',
+          actor: 'BPF_MAP',
+          title: 'Single-Hook Input + Return Telemetry',
+          detail: 'fexit reads both sk->skc_daddr and int ret in one shot without needing an entry/exit correlation hash map.'
+        }
+      ],
+      codeLanguage: 'c',
+      codeTitle: 'fexit_tcp_connect.bpf.c — Simultaneous Input Args + Return Code',
+      codeSnippet: `#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+
+// Notice BPF_PROG (NOT BPF_KPROBE!) unpacks both input 'sk' AND return 'ret':
+SEC("fexit/tcp_v4_connect")
+int BPF_PROG(trace_tcp_connect_exit, struct sock *sk, struct sockaddr *uaddr, int addr_len, int ret) {
+    // Direct BTF pointer dereference — no bpf_probe_read_kernel() required!
+    __u32 daddr = sk->__sk_common.skc_daddr;
+    __u16 dport = sk->__sk_common.skc_dport;
+
+    bpf_printk("tcp_v4_connect to %pI4:%d returned %d\\n",
+               &daddr, __builtin_bswap16(dport), ret);
+    return 0;
+}
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";`
+    },
+    whyUseInsteadOf: {
+      heading: 'Why Use `fentry`/`fexit` Instead of `kprobe`/`kretprobe`?',
+      primaryTech: 'fentry / fexit (BTF Trampolines)',
+      alternativeTech: 'kprobe / kretprobe (pt_regs)',
+      rationaleParagraphs: [
+        'Whenever your target fleet runs Linux 5.5+ on x86_64 (or Linux 6.0+ on ARM64), `fentry` and `fexit` are strictly faster and simpler to write than `kprobe`/`kretprobe`.',
+        'However, `kprobes` remain essential when you need to probe an instruction offset in the middle of a function body or support older Linux 4.14–5.4 kernels.'
+      ],
+      comparisonTable: [
+        {
+          dimension: 'Per-Invocation Overhead',
+          primaryChoice: '~15–25 ns (custom JIT trampoline)',
+          alternativeChoice: '~100–250 ns (full pt_regs save/restore)',
+          winner: 'primary'
+        },
+        {
+          dimension: 'Access to Input Args on Function Exit',
+          primaryChoice: 'Built-in! fexit receives all inputs + return value',
+          alternativeChoice: 'No — kretprobe requires manual Hash Map correlation',
+          winner: 'primary'
+        },
+        {
+          dimension: 'Pointer Dereferencing Ergonomics',
+          primaryChoice: 'Direct BTF pointer reads (sk->skc_daddr)',
+          alternativeChoice: 'Requires bpf_probe_read_kernel() / BPF_CORE_READ()',
+          winner: 'primary'
+        }
+      ],
+      whenToUsePrimary: [
+        'High-frequency kernel functions (VFS, TCP/IP, scheduler) on Linux 5.5+ kernels.',
+        'Any function exit probe where you need both input arguments and the return code.'
+      ],
+      whenToUseAlternative: [
+        'Linux 4.x / 5.4 kernels or when attaching to inlined/mid-function instruction offsets.'
+      ]
+    },
+    comprehensionCheck: {
+      question: 'Which macro must you use to unpack arguments in a `SEC("fentry/...")` or `SEC("fexit/...")` program, and why does `fexit` eliminate the need for a correlation hash map?',
+      options: [
+        'Use `BPF_KPROBE`; it automatically creates a hidden hash map in user space.',
+        'Use `BPF_PROG`; the kernel BPF trampoline preserves the function input arguments on the trampoline stack frame while calling the original function, passing both inputs and the return value to `fexit`.',
+        'Use `PT_REGS_PARM1`; `fexit` only receives the return code.',
+        'Use `BPF_CORE_READ`; it rewrites the kernel stack.'
+      ],
+      correctIndex: 1,
+      explanation:
+        'BTF trampolines (`fentry`/`fexit`/`lsm`) pass arguments as an `unsigned long long *ctx` array unpacked by `BPF_PROG()`, and `fexit` preserves all input arguments alongside the final return value.'
+    },
+    relatedTutorialId: 'tut-mid-13-fentry-fexit',
+    simulatorPresetId: 'preset-tcp-latency'
+  },
+
+  {
+    id: 'user-vs-kernel-memory-addressing',
+    index: '14',
+    title: 'User-Space vs. Kernel-Space Memory Addressing in eBPF',
+    subtitle: 'Virtual address spaces, SMAP hardware protection, demand paging faults, and sleepable (.s) probes.',
+    category: 'Verifier, JIT & CO-RE',
+    readTime: '12 min read',
+    minKernel: 'Linux 5.5+',
+    summary:
+      'Understand why user-space pointers (__user *) and kernel-space pointers live in separate virtual address ranges, why mixing bpf_probe_read_user() and bpf_probe_read_kernel() fails, and how sleepable eBPF programs resolve swapped-out user pages.',
+    whatIsIt: {
+      heading: 'What is the Split Virtual Address Space Between User Space and the Kernel?',
+      paragraphs: [
+        'On 64-bit Linux, virtual memory is split into two strictly separated halves: **User-Space Virtual Addresses** live in the lower canonical half (`0x0000000000000000` to `0x00007fffffffffff`), while **Kernel-Space Virtual Addresses** live in the upper canonical half (`0xffff800000000000` to `0xffffffffffffffff`).',
+        'Modern CPUs enforce hardware security boundaries between these two halves—most notably **SMAP** (Supervisor Mode Access Prevention on x86_64) and **PAN** (Privileged Access Never on ARM64). If kernel code attempts to dereference a user-space pointer directly without explicitly unlocking SMAP/PAN via dedicated copy routines, the CPU immediately triggers a fatal kernel oops!',
+        'Furthermore, user-space memory is **demand-paged and swappable**: when a process calls `malloc()` or passes a string pointer to `execve()`, the physical RAM page backing that virtual address might not even be mapped in the hardware page table yet! Because standard eBPF programs run with preemption and page-faults disabled, reading an unmapped user page cannot sleep waiting for disk I/O—it must catch the fault gracefully and return `-EFAULT`.'
+      ],
+      keyTakeaways: [
+        'Use `bpf_probe_read_user()` / `bpf_probe_read_user_str()` / `BPF_CORE_READ_USER()` ONLY for user-space pointers (`__user *`, syscall arguments, uprobes).',
+        'Use `bpf_probe_read_kernel()` / `bpf_probe_read_kernel_str()` / `BPF_CORE_READ()` ONLY for kernel-space pointers (`task_struct *`, `sock *`, `file *`).',
+        'On Linux 5.10+, **Sleepable eBPF programs** (`SEC("fentry.s/...")`, `SEC("uprobe.s/...")`) can use `bpf_copy_from_user()` to fault in unmapped user pages synchronously!'
+      ],
+      mentalModelAnalogy:
+        'Kernel memory is like a vault inside the central bank that is always unlocked for bank staff (Ring 0) and never moves. User-space memory is like a customer’s safety deposit box in a separate building—you must use a special keycard (SMAP unlock via bpf_probe_read_user) and be prepared for the box to be temporarily empty (paged out).'
+    },
+    howItWorks: {
+      heading: 'How `bpf_probe_read_user()` Handles Page Faults & How Sleepable eBPF Works',
+      paragraphs: [
+        'When your non-sleepable eBPF program calls `bpf_probe_read_user(dst, sz, user_ptr)`, the kernel executes `pagefault_disable()`, issues the `stac` instruction (Set AC flag to temporarily permit user-page access under SMAP), and attempts to copy the bytes.',
+        'If the user page is not present in the CPU page table, the MMU raises a `#PF` (Page Fault) exception. Because `pagefault_disable()` is active, the kernel’s page fault handler does NOT try to read from disk—instead, it looks up the instruction pointer in the **Kernel Exception Fixup Table (`_ASM_EXTABLE`)**, zeroes out `dst`, and returns `-EFAULT` (-14) to your eBPF program in under 100 nanoseconds!'
+      ],
+      lifecycleSteps: [
+        {
+          step: '01',
+          actor: 'KERNEL_HOOK',
+          title: 'Identify Pointer Address Space',
+          detail: 'Syscall tracepoint args (ctx->args[i]) point to __user memory; kprobe struct pointers point to kernel memory.'
+        },
+        {
+          step: '02',
+          actor: 'VERIFIER',
+          title: 'Destination Buffer Bounds Verification',
+          detail: 'The Verifier checks that dst is on the eBPF stack or map value and size is a bounded positive integer.'
+        },
+        {
+          step: '03',
+          actor: 'KERNEL_HOOK',
+          title: 'SMAP Unlock & Exception Table Guard',
+          detail: 'copy_from_user_nofault() validates the canonical user range and copies bytes under exception-table protection.'
+        },
+        {
+          step: '04',
+          actor: 'BPF_MAP',
+          title: 'Graceful -EFAULT or Sleepable Fault-In',
+          detail: 'If unmapped, non-sleepable probes receive -EFAULT; sleepable (.s) probes using bpf_copy_from_user() page the memory in.'
+        }
+      ],
+      codeLanguage: 'c',
+      codeTitle: 'memory_spaces_comparison.bpf.c — Reading Kernel vs. User Pointers Correctly',
+      codeSnippet: `#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_core_read.h>
+
+SEC("tracepoint/syscalls/sys_enter_openat")
+int trace_openat_memory_demo(struct trace_event_raw_sys_enter *ctx) {
+    // 1. KERNEL SPACE POINTER: task_struct lives in 0xffff8... kernel memory
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    __u32 ppid = BPF_CORE_READ(task, real_parent, tgid); // Uses bpf_probe_read_kernel!
+
+    // 2. USER SPACE POINTER: ctx->args[1] (pathname) lives in 0x00007... user memory
+    const char *user_filename = (const char *)ctx->args[1];
+    char path[128];
+    long res = bpf_probe_read_user_str(&path, sizeof(path), user_filename);
+    if (res < 0) {
+        // User page was unmapped or NULL — handled safely without crashing!
+        return 0;
+    }
+
+    bpf_printk("ppid=%d opening user path=%s\\n", ppid, path);
+    return 0;
+}
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";`
+    },
+    whyUseInsteadOf: {
+      heading: 'Why Use `bpf_probe_read_user` vs. `bpf_copy_from_user` (Sleepable `.s` Programs)?',
+      primaryTech: 'bpf_probe_read_user (Non-Sleepable)',
+      alternativeTech: 'bpf_copy_from_user (Sleepable SEC("fentry.s/...") / SEC("uprobe.s/..."))',
+      rationaleParagraphs: [
+        '`bpf_probe_read_user()` works in every tracing program type (`tracepoint`, `kprobe`, `fentry`, `uprobe`) and never blocks the calling thread, making it the default choice for 95% of observability probes.',
+        'However, when reading newly allocated `argv`/`envp` pages or cold user buffers that haven’t been touched yet, a sleepable program (`SEC("fentry.s/...")` or `SEC("uprobe.s/...")`) calling `bpf_copy_from_user()` is allowed to trigger the OS page fault handler and wait for the page to be mapped.'
+      ],
+      comparisonTable: [
+        {
+          dimension: 'Behavior on Unfaulted / Swapped User Page',
+          primaryChoice: 'Returns -EFAULT immediately (never blocks CPU)',
+          alternativeChoice: 'Faults the page into RAM synchronously and succeeds',
+          winner: 'alternative'
+        },
+        {
+          dimension: 'Allowed Hook Points',
+          primaryChoice: 'All kprobes, tracepoints, uprobes, fentry, LSM',
+          alternativeChoice: 'Only sleepable fentry.s, fexit.s, lsm.s, and uprobe.s (Linux 5.10+)',
+          winner: 'primary'
+        },
+        {
+          dimension: 'Worst-Case Latency Impact on Application',
+          primaryChoice: '< 100 nanoseconds deterministic',
+          alternativeChoice: 'Microseconds if a major disk page fault is triggered',
+          winner: 'primary'
+        }
+      ],
+      whenToUsePrimary: [
+        'Low-overhead production telemetry across tracepoints and kprobes.'
+      ],
+      whenToUseAlternative: [
+        'Security auditing in `lsm.s/bprm_committed_creds` or `uprobe.s` where missing a cold user buffer is unacceptable.'
+      ]
+    },
+    comprehensionCheck: {
+      question: 'Why does calling `bpf_probe_read_kernel_str()` on a syscall `pathname` pointer (`ctx->args[0]` in `sys_enter_execve`) fail with `-EFAULT` on modern CPUs?',
+      options: [
+        'Because strings in `execve` are encrypted by the kernel.',
+        'Because `pathname` is a user-space virtual address (`0x00007...`), and `bpf_probe_read_kernel_str()` enforces canonical kernel address range checks and does not unlock hardware SMAP/PAN user-memory protections.',
+        'Because `ctx->args[0]` is a file descriptor integer, not a pointer.',
+        'Because `bpf_probe_read_kernel_str()` only reads 4 bytes.'
+      ],
+      correctIndex: 1,
+      explanation:
+        'Syscall pointer arguments reside in user-space virtual memory (`__user *`). Reading them requires `bpf_probe_read_user_str()`, which validates the user address range and unlocks hardware SMAP/PAN.'
+    },
+    relatedTutorialId: 'tut-beg-06-file-unlink',
+    simulatorPresetId: 'preset-execve-audit'
+  },
+
+  {
+    id: 'linux-syscall-abi-and-tracing',
+    index: '15',
+    title: 'Linux System Call ABI & Syscall Tracing Internals',
+    subtitle: 'From userspace `syscall` instruction to `do_syscall_64`, `pt_regs` wrapper indirection, and `sys_enter` vs. `fentry`.',
+    category: 'Foundations & Architecture',
+    readTime: '12 min read',
+    minKernel: 'Linux 4.17+',
+    summary:
+      'Trace the exact hardware and kernel path of a Linux system call, understand why Linux 4.17+ wraps syscall arguments inside a double pt_regs indirection for kprobes, and master the 4 ways to trace syscalls in eBPF.',
+    whatIsIt: {
+      heading: 'What Happens When a Process Invokes a Linux System Call?',
+      paragraphs: [
+        'A system call is the controlled hardware gate between unprivileged User Mode (Ring 3 / EL0) and privileged Kernel Mode (Ring 0 / EL1). On x86_64 Linux, user-space code places the **Syscall Number** into register `%rax` (e.g., `59` for `execve`, `257` for `openat`), places up to 6 arguments into registers `%rdi`, `%rsi`, `%rdx`, `%r10`, `%r8`, `%r9`, and executes the CPU `syscall` instruction.',
+        'The CPU switches rings, loads the kernel stack pointer, and jumps to `entry_SYSCALL_64`, which pushes all user CPU registers onto the kernel stack as a `struct pt_regs` and calls `do_syscall_64(regs, nr)`.',
+        'Crucial Linux 4.17+ Architectural Change: To prevent unused user register values from leaking into speculative execution gadgets (Spectre v1), Linux 4.17 changed every syscall handler signature to `long __x64_sys_openat(const struct pt_regs *regs)`! Instead of receiving `(int dfd, const char *filename, ...)` in CPU registers, `__x64_sys_*` receives a SINGLE pointer (`%rdi`) pointing to the user `struct pt_regs` on the kernel stack!'
+      ],
+      keyTakeaways: [
+        '**Method 1 (Recommended): `SEC("tracepoint/syscalls/sys_enter_<name>")`** — Unpacks the 6 syscall arguments cleanly into `ctx->args[0..5]` regardless of CPU architecture.',
+        '**Method 2 (Global Multiplexer): `SEC("raw_tracepoint/sys_enter")`** — Fires on all 450+ syscalls with minimal overhead; ideal for full-system seccomp/strace profilers.',
+        '**Method 3 (Raw Kprobe): `SEC("kprobe/__x64_sys_<name>")`** — Requires double-dereferencing `struct pt_regs *real_regs = (struct pt_regs *)PT_REGS_PARM1(ctx)`.',
+        '**Method 4 (VFS/Subsystem or LSM Hook): `SEC("lsm/file_open")` / `SEC("fentry/ksys_read")`** — Hooks after the kernel has already copied user pointers and resolved file descriptors!'
+      ],
+      mentalModelAnalogy:
+        'Hooking `kprobe/__x64_sys_openat` is like intercepting a sealed diplomatic pouch (`pt_regs *`) where you have to open the outer envelope first just to read the letter inside. Hooking `tracepoint/syscalls/sys_enter_openat` hands you the opened letter with all 6 paragraphs (`ctx->args[0..5]`) neatly labeled.'
+    },
+    howItWorks: {
+      heading: 'How `sys_enter_*` Tracepoints Unpack Syscall Arguments vs. `__x64_sys_*` Wrappers',
+      paragraphs: [
+        'When `CONFIG_FTRACE_SYSCALLS` is enabled, `syscall_trace_enter()` extracts the 6 user-space register arguments from `pt_regs` via `syscall_get_arguments(current, regs, args)` and passes them to the tracepoint inside `struct trace_event_raw_sys_enter { struct trace_entry ent; long id; unsigned long args[6]; }`.',
+        'When the syscall finishes, `syscall_trace_exit()` invokes `sys_exit_<name>` with `struct trace_event_raw_sys_exit { struct trace_entry ent; long id; long ret; }`, where `ctx->ret` holds the return value (or negative `-errno` on failure).'
+      ],
+      lifecycleSteps: [
+        {
+          step: '01',
+          actor: 'USERSPACE',
+          title: 'CPU Executes syscall Instruction',
+          detail: 'Go runtime or libc puts syscall NR in %rax and args in %rdi, %rsi, %rdx, %r10, %r8, %r9.'
+        },
+        {
+          step: '02',
+          actor: 'SYSCALL',
+          title: 'entry_SYSCALL_64 Saves struct pt_regs',
+          detail: 'Kernel switches to Ring 0 stack and saves all user registers into struct pt_regs.'
+        },
+        {
+          step: '03',
+          actor: 'KERNEL_HOOK',
+          title: 'sys_enter_<name> Tracepoint Fires',
+          detail: 'eBPF tracepoint receives ctx->args[0..5] before the syscall implementation runs.'
+        },
+        {
+          step: '04',
+          actor: 'KERNEL_HOOK',
+          title: 'sys_exit_<name> Tracepoint Fires with ctx->ret',
+          detail: 'After __x64_sys_<name> completes, sys_exit fires with the return value or -errno.'
+        }
+      ],
+      codeLanguage: 'c',
+      codeTitle: 'syscall_tracing_methods.bpf.c — Clean Tracepoint vs. Double-Indirection Kprobe',
+      codeSnippet: `#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+
+// METHOD A (RECOMMENDED): Syscall Tracepoint — clean ctx->args[0..5]
+SEC("tracepoint/syscalls/sys_enter_openat")
+int tp_openat(struct trace_event_raw_sys_enter *ctx) {
+    int dfd = (int)ctx->args[0];
+    const char *filename = (const char *)ctx->args[1];
+    return 0;
+}
+
+// METHOD B: Raw Kprobe on __x64_sys_openat — requires unwrapping inner pt_regs!
+SEC("kprobe/__x64_sys_openat")
+int kp_sys_openat(struct pt_regs *ctx) {
+    // Parameter 1 of __x64_sys_openat is the user struct pt_regs pointer:
+    struct pt_regs *real_regs = (struct pt_regs *)PT_REGS_PARM1(ctx);
+    int dfd = (int)PT_REGS_PARM1_CORE(real_regs);
+    const char *filename = (const char *)PT_REGS_PARM2_CORE(real_regs);
+    return 0;
+}
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";`
+    },
+    whyUseInsteadOf: {
+      heading: 'Why Use `tracepoint/syscalls/sys_enter_*` Instead of `kprobe/__x64_sys_*`?',
+      primaryTech: 'tracepoint/syscalls/sys_enter_*',
+      alternativeTech: 'kprobe/__x64_sys_*',
+      rationaleParagraphs: [
+        'Syscall tracepoints (`sys_enter_*` and `sys_exit_*`) are architecture-neutral across x86_64, ARM64, and RISC-V and expose arguments directly in `ctx->args[0..5]`.',
+        'By contrast, `__x64_sys_*` symbol names are architecture-specific (`__arm64_sys_*` on ARM64) and require double-dereferencing `pt_regs`.'
+      ],
+      comparisonTable: [
+        {
+          dimension: 'Cross-Architecture Portability (x86_64 vs ARM64)',
+          primaryChoice: '100% Portable — identical section name & ctx->args[0..5]',
+          alternativeChoice: 'Breaks — symbol changes from __x64_sys_* to __arm64_sys_*',
+          winner: 'primary'
+        },
+        {
+          dimension: 'Argument Access Simplicity',
+          primaryChoice: 'Direct array indexing: ctx->args[0], ctx->args[1]',
+          alternativeChoice: 'Requires double pt_regs indirection (PT_REGS_PARM1_CORE)',
+          winner: 'primary'
+        },
+        {
+          dimension: 'Availability When CONFIG_FTRACE_SYSCALLS is Disabled',
+          primaryChoice: 'Requires CONFIG_FTRACE_SYSCALLS=y (standard on all major distros)',
+          alternativeChoice: 'Works even without syscall tracepoints',
+          winner: 'tie'
+        }
+      ],
+      whenToUsePrimary: [
+        'All standard system call tracing in C + Go (cilium/ebpf).'
+      ],
+      whenToUseAlternative: [
+        'Prefer hooking the underlying kernel helper (like `ksys_read` or `vfs_open`) if you need internal kernel structs.'
+      ]
+    },
+    comprehensionCheck: {
+      question: 'On Linux 4.17+ x86_64 kernels, why does reading `PT_REGS_PARM2(ctx)` directly inside `SEC("kprobe/__x64_sys_openat")` return garbage instead of the `filename` pointer?',
+      options: [
+        'Because `openat` takes no arguments.',
+        'Because `__x64_sys_openat(const struct pt_regs *regs)` is a wrapper whose ONLY argument in `%rdi` (`PT_REGS_PARM1(ctx)`) is a pointer to the inner `struct pt_regs` holding the actual user syscall registers.',
+        'Because `kprobes` cannot read pointers.',
+        'Because `filename` is stored in `%rax`.'
+      ],
+      correctIndex: 1,
+      explanation:
+        'Since Linux 4.17, `__x64_sys_*` wrappers take a single `const struct pt_regs *regs` parameter in `PT_REGS_PARM1(ctx)`. Using `tracepoint/syscalls/sys_enter_openat` avoids this wrapper indirection completely.'
+    },
+    relatedTutorialId: 'tut-beg-01-execve',
+    simulatorPresetId: 'preset-execve-audit'
+  },
+
+  {
+    id: 'bpf-helpers-vs-kfuncs',
+    index: '16',
+    title: 'BPF Helper Functions vs. Modern Kernel Kfuncs',
+    subtitle: 'How the 5-argument register ABI works, why UAPI helpers were frozen, and how BTF Kfuncs extend eBPF.',
+    category: 'Foundations & Architecture',
+    readTime: '10 min read',
+    minKernel: 'Linux 5.13+',
+    summary:
+      'Discover how eBPF programs invoke kernel helper functions using registers R1–R5, why the Linux kernel community froze traditional UAPI helpers at ~211 functions, and how BTF-typed Kernel Functions (kfuncs) provide direct access to modern kernel subsystems.',
+    whatIsIt: {
+      heading: 'What are BPF Helper Functions and Kernel Kfuncs?',
+      paragraphs: [
+        'Because an eBPF program runs in a restricted sandbox, it cannot call arbitrary kernel C functions directly—nor can it execute hardware I/O instructions or allocate raw kernel memory on its own. Instead, it interacts with the operating system by calling **BPF Helper Functions** (such as `bpf_map_lookup_elem`, `bpf_probe_read_user`, or `bpf_ringbuf_reserve`).',
+        'Every traditional BPF helper is defined in the Linux UAPI header (`include/uapi/linux/bpf.h`) with a permanent integer ID (`enum bpf_func_id`, from `#1` to `#211`). Because UAPI interfaces can never be broken or removed once merged into Linus’s tree, adding a new UAPI helper required years of bike-shedding.',
+        'To solve this, Linux 5.13+ introduced **BPF Kfuncs (Kernel Functions)**: regular Linux kernel C functions annotated with `__bpf_kfunc` and exported to eBPF via BTF type metadata (`__ksym`). Today, all new Linux eBPF capabilities—such as dynamic pointers (`bpf_dynptr`), RCU task reference counting (`bpf_task_acquire`), custom schedulers (`sched_ext`), and XDP hardware metadata (`bpf_xdp_metadata_rx_timestamp`)—are shipped as **Kfuncs**!'
+      ],
+      keyTakeaways: [
+        'Both BPF Helpers and Kfuncs use the eBPF calling convention: up to **5 arguments** passed in registers `R1, R2, R3, R4, R5`, with the return value placed in `R0`.',
+        'Across any helper/kfunc call, registers `R1–R5` are clobbered (scratch registers), while `R6–R9` are callee-saved.',
+        'Traditional Helpers are compiled as `call <imm_helper_id>` (resolved by integer ID); Kfuncs are compiled as `call <btf_id>` (resolved by symbol name via `.BTF`).'
+      ],
+      mentalModelAnalogy:
+        'Traditional BPF Helpers are like the 200 permanent constitutional amendments of the Linux kernel—rock-solid everywhere, but frozen in number. BPF Kfuncs are like modular statutory APIs exported with self-describing BTF schemas that let subsystems expose new powers immediately.'
+    },
+    howItWorks: {
+      heading: 'How the eBPF Calling Convention (`R0–R5`) and JIT Inlining Work',
+      paragraphs: [
+        'Because the eBPF instruction set specifies only 5 argument registers (`R1` through `R5`), **no BPF helper or kfunc can ever accept more than 5 parameters**. When more than 5 values are needed, helpers accept a pointer to a configuration struct on the stack.',
+        'When the JIT compiler translates `call BPF_FUNC_map_lookup_elem` into native x86_64 or ARM64 machine code, it maps `R1..R5` directly to the CPU’s native function-call registers (`%rdi, %rsi, %rdx, %rcx, %r8` on x86_64)—meaning calling a BPF helper has **zero register-shuffling overhead**!'
+      ],
+      lifecycleSteps: [
+        {
+          step: '01',
+          actor: 'USERSPACE',
+          title: 'Clang Emits Call Instruction',
+          detail: 'Standard helpers emit call #id; kfuncs emit extern __ksym BTF relocation records.'
+        },
+        {
+          step: '02',
+          actor: 'VERIFIER',
+          title: 'Argument Register & Return Contract Check',
+          detail: 'Verifier validates R1–R5 types against the helper proto or kfunc BTF signature and marks R1–R5 as clobbered after the call.'
+        },
+        {
+          step: '03',
+          actor: 'VERIFIER',
+          title: 'Reference Tracking Enforcement',
+          detail: 'For acquiring helpers/kfuncs (bpf_ringbuf_reserve, bpf_task_acquire), Verifier forces a matching release before exit.'
+        },
+        {
+          step: '04',
+          actor: 'KERNEL_HOOK',
+          title: 'Direct Native Call or Inline Expansion',
+          detail: 'JIT emits a direct relative call instruction (or inlines array map lookups directly into pointer math).'
+        }
+      ],
+      codeLanguage: 'c',
+      codeTitle: 'helpers_and_kfuncs.bpf.c — Using UAPI Helpers Alongside Modern BTF Kfuncs',
+      codeSnippet: `#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+
+// Declare modern BTF Kfuncs with __ksym attribute:
+extern struct task_struct *bpf_task_acquire(struct task_struct *p) __ksym;
+extern void bpf_task_release(struct task_struct *p) __ksym;
+
+SEC("tp_btf/sched_process_fork")
+int BPF_PROG(on_fork, struct task_struct *parent, struct task_struct *child) {
+    // 1. Classic UAPI Helper (#5):
+    __u64 ts = bpf_ktime_get_ns();
+
+    // 2. Modern BTF Kfunc (acquires RCU-safe reference to child task_struct):
+    struct task_struct *acquired = bpf_task_acquire(child);
+    if (!acquired) return 0;
+
+    bpf_printk("Forked child pid=%d at ts=%llu\\n", acquired->pid, ts);
+
+    // Verifier enforces calling bpf_task_release() before program exit!
+    bpf_task_release(acquired);
+    return 0;
+}
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";`
+    },
+    whyUseInsteadOf: {
+      heading: 'How Do Traditional UAPI BPF Helpers Compare to Modern BTF Kfuncs?',
+      primaryTech: 'Traditional UAPI BPF Helpers',
+      alternativeTech: 'Modern BTF Kernel Kfuncs (__ksym)',
+      rationaleParagraphs: [
+        'Use standard UAPI BPF Helpers (`bpf_map_lookup_elem`, `bpf_ringbuf_reserve`, `bpf_probe_read_user`) for all core map, memory, and context operations—they are universally supported across all kernels.',
+        'Reach for BTF Kfuncs when working with Linux 5.18+ features such as `bpf_dynptr`, `bpf_task_acquire`, `bpf_rcu_read_lock`, or XDP hardware offloads.'
+      ],
+      comparisonTable: [
+        {
+          dimension: 'ABI Stability Guarantee',
+          primaryChoice: 'Permanent Linux UAPI contract (never changes)',
+          alternativeChoice: 'Kernel-version BTF contract (can evolve across kernel releases)',
+          winner: 'primary'
+        },
+        {
+          dimension: 'Maximum Number of Arguments',
+          primaryChoice: '5 arguments (R1–R5)',
+          alternativeChoice: '5 arguments (R1–R5)',
+          winner: 'tie'
+        },
+        {
+          dimension: 'Access to New Linux 6.x Subsystems',
+          primaryChoice: 'Frozen (no new UAPI helpers added since Linux 6.1)',
+          alternativeChoice: 'Active — all new kernel eBPF APIs are added as Kfuncs',
+          winner: 'alternative'
+        }
+      ],
+      whenToUsePrimary: [
+        'All foundational map, ringbuf, probing, packet, and context operations.'
+      ],
+      whenToUseAlternative: [
+        'Advanced reference-counted kernel objects, dynamic pointers (dynptr), and Linux 6.x features.'
+      ]
+    },
+    comprehensionCheck: {
+      question: 'Why can no BPF helper function or Kfunc accept 6 or more arguments directly?',
+      options: [
+        'Because C compilers do not support 6 arguments.',
+        'Because the eBPF virtual machine ABI defines exactly 5 argument registers (`R1` through `R5`), with `R0` reserved for the return value and `R6–R9` reserved as callee-saved registers.',
+        'Because the stack is 6 bytes.',
+        'Because Go `cilium/ebpf` strips extra arguments.'
+      ],
+      correctIndex: 1,
+      explanation:
+        'The eBPF calling convention passes function arguments exclusively in registers `R1–R5` (matching x86_64/ARM64 hardware registers).'
+    },
+    relatedTutorialId: 'tut-beg-07-core-macros',
+    simulatorPresetId: 'preset-execve-audit'
+  },
+
+  {
+    id: 'ebpf-concurrency-spinlocks-timers',
+    index: '17',
+    title: 'Concurrency, Spinlocks & Kernel Timers in eBPF',
+    subtitle: 'Preventing multi-core map races with Per-CPU maps, Atomics, `bpf_spin_lock`, and `bpf_timer`.',
+    category: 'BPF Maps & Ring Buffers',
+    readTime: '11 min read',
+    minKernel: 'Linux 5.15+',
+    summary:
+      'Learn how to synchronize state safely when the same eBPF program executes simultaneously across 64+ CPU cores, and how to run periodic background logic inside the kernel using struct bpf_timer.',
+    whatIsIt: {
+      heading: 'What happens When Multiple CPU Cores Run Your eBPF Program Simultaneously?',
+      paragraphs: [
+        'eBPF programs are inherently **massively parallel**: on a 64-core server, 64 network packets or 64 system calls can trigger your eBPF program on all 64 CPU cores at the exact same nanosecond!',
+        'If your program looks up a shared `BPF_MAP_TYPE_HASH` entry and executes a plain C increment (`val->packets++`), two CPU cores will read the same value, increment it in their local registers, and overwrite each other—causing lost updates. Even worse, if your map value contains **multiple interdependent fields** (like a rate limiter’s `tokens` and `last_updated_ns`), concurrent updates without synchronization produce corrupted state.',
+        'Linux eBPF provides three progressive concurrency primitives depending on your data structure: (1) **Per-CPU Maps** (zero locks, isolated per-core memory), (2) **Atomic Builtins** (`__sync_fetch_and_add` for single 64-bit counters in shared maps), and (3) **`struct bpf_spin_lock`** (for atomic multi-field updates inside a shared map entry), plus **`struct bpf_timer`** for asynchronous background callbacks!'
+      ],
+      keyTakeaways: [
+        'Use `BPF_MAP_TYPE_PERCPU_ARRAY` / `PERCPU_HASH` whenever Go userspace only reads aggregated totals.',
+        'Use `__sync_fetch_and_add(&val->count, 1)` when updating independent 64-bit counters inside a shared `BPF_MAP_TYPE_HASH`.',
+        'Use `bpf_spin_lock(&val->lock)` and `bpf_spin_unlock(&val->lock)` when updating multiple interdependent fields (e.g., Token Bucket or Sliding Window) together.'
+      ],
+      mentalModelAnalogy:
+        'Per-CPU maps give every cashier their own private cash register (tallied at the end of the day). Atomic instructions are a turnstile counter that clicks safely one person at a time. A bpf_spin_lock is a physical key to a shared ledger room where you update both the balance and timestamp before unlocking the door.'
+    },
+    howItWorks: {
+      heading: 'How `bpf_spin_lock` and `bpf_timer` Are Enforced by the Verifier',
+      paragraphs: [
+        'To prevent kernel deadlocks, the eBPF Static Verifier enforces strict rules on `struct bpf_spin_lock`: a program may only hold **one spinlock at a time**, **cannot call any BPF helper functions** while holding the lock (preventing lock-ordering deadlocks or sleeping), and **must unlock on every branch path** before returning.',
+        'Similarly, `struct bpf_timer` (introduced in Linux 5.15) embeds a kernel high-resolution timer (`hrtimer`) inside a BTF map value. Calling `bpf_timer_set_callback(&val->timer, my_callback_fn)` and `bpf_timer_start(&val->timer, ns, 0)` schedules `my_callback_fn` to execute in softirq context when the timer expires!'
+      ],
+      lifecycleSteps: [
+        {
+          step: '01',
+          actor: 'VERIFIER',
+          title: 'BTF Field Offset Verification',
+          detail: 'The kernel inspects the map’s BTF value struct to locate the exact byte offsets of struct bpf_spin_lock and struct bpf_timer.'
+        },
+        {
+          step: '02',
+          actor: 'KERNEL_HOOK',
+          title: 'bpf_spin_lock Acquires Local Lock',
+          detail: 'Disables local CPU interrupts/preemption and acquires the per-element spinlock.'
+        },
+        {
+          step: '03',
+          actor: 'BPF_MAP',
+          title: 'Multi-Field Atomic Mutation',
+          detail: 'Updates tokens and timestamp together with zero helper calls permitted inside the critical section.'
+        },
+        {
+          step: '04',
+          actor: 'KERNEL_HOOK',
+          title: 'bpf_spin_unlock Releases Lock',
+          detail: 'Verifier proves every exit path calls bpf_spin_unlock before returning.'
+        }
+      ],
+      codeLanguage: 'c',
+      codeTitle: 'spinlock_token_bucket.bpf.c — Thread-Safe Multi-Core Token Bucket',
+      codeSnippet: `#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+
+struct rate_bucket {
+    struct bpf_spin_lock lock;
+    __u64 tokens;
+    __u64 last_refill_ns;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, __u32);
+    __type(value, struct rate_bucket);
+} client_buckets SEC(".maps");
+
+SEC("xdp")
+int xdp_rate_limit(struct xdp_md *ctx) {
+    __u32 client_ip = 0x0100000A; // 10.0.0.1
+    __u64 now = bpf_ktime_get_ns(); // Call helpers BEFORE acquiring spinlock!
+
+    struct rate_bucket *b = bpf_map_lookup_elem(&client_buckets, &client_ip);
+    if (!b) return XDP_PASS;
+
+    bpf_spin_lock(&b->lock);
+    if (now - b->last_refill_ns > 1000000000ULL) {
+        b->tokens = 100;
+        b->last_refill_ns = now;
+    }
+    bool allow = false;
+    if (b->tokens > 0) {
+        b->tokens--;
+        allow = true;
+    }
+    bpf_spin_unlock(&b->lock);
+
+    return allow ? XDP_PASS : XDP_DROP;
+}
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";`
+    },
+    whyUseInsteadOf: {
+      heading: 'When Should You Use `bpf_spin_lock` vs. Atomic Builtins vs. Per-CPU Maps?',
+      primaryTech: 'bpf_spin_lock (Multi-Field Critical Section)',
+      alternativeTech: '__sync_fetch_and_add (Single-Field Atomic) / Per-CPU Map',
+      rationaleParagraphs: [
+        'Always reach for Per-CPU maps first for read-mostly or write-only counters, and `__sync_fetch_and_add` when a single shared 64-bit integer needs cross-core visibility.',
+        'Reserve `bpf_spin_lock` specifically for state machines (token buckets, sliding windows, connection state transitions) where two or more struct fields must be read and updated atomically.'
+      ],
+      comparisonTable: [
+        {
+          dimension: 'Multi-Field Atomic Consistency',
+          primaryChoice: 'Guaranteed — updates multiple struct fields atomically',
+          alternativeChoice: 'Not supported — atomics only protect a single 64-bit word',
+          winner: 'primary'
+        },
+        {
+          dimension: 'Contention Under 64-Core Traffic',
+          primaryChoice: 'Cores spin briefly if updating the exact same map key',
+          alternativeChoice: 'Zero spinning with Per-CPU maps',
+          winner: 'alternative'
+        },
+        {
+          dimension: 'Helper Calls Inside Critical Section',
+          primaryChoice: 'Forbidden by Verifier while holding lock',
+          alternativeChoice: 'No restrictions',
+          winner: 'alternative'
+        }
+      ],
+      whenToUsePrimary: [
+        'Token-bucket rate limiters, sliding window anomaly detectors, and multi-field state machines.'
+      ],
+      whenToUseAlternative: [
+        'Simple packet/byte counters or histograms.'
+      ]
+    },
+    comprehensionCheck: {
+      question: 'Why did the code example above call `bpf_ktime_get_ns()` BEFORE calling `bpf_spin_lock(&b->lock)`?',
+      options: [
+        'Because `bpf_ktime_get_ns()` is slow.',
+        'Because the eBPF Verifier strictly forbids calling any BPF helper function (other than `bpf_spin_unlock`) while holding a `bpf_spin_lock` to guarantee bounded, deadlock-free lock hold times.',
+        'Because `bpf_spin_lock` resets the system clock.',
+        'Because `bpf_ktime_get_ns()` modifies the map.'
+      ],
+      correctIndex: 1,
+      explanation:
+        'To guarantee that spinlocks are never held for more than a few nanoseconds and can never deadlock, the Verifier rejects any program that invokes BPF helpers between `bpf_spin_lock()` and `bpf_spin_unlock()`.'
+    },
+    relatedTutorialId: 'tut-adv-21-spinlock-timer',
+    simulatorPresetId: 'preset-xdp-synflood'
+  },
+
+  {
+    id: 'cgroup-v2-ebpf-hooks',
+    index: '18',
+    title: 'Cgroup v2 eBPF Hooks for Container Governance & Load Balancing',
+    subtitle: 'Scoping eBPF socket and packet policies directly to Kubernetes pod cgroups (`cgroup/connect4`, `cgroup/skb`).',
+    category: 'Kernel Hook Subsystems',
+    readTime: '11 min read',
+    minKernel: 'Linux 4.10+',
+    summary:
+      'Understand how Cgroup v2 eBPF hooks attach policies directly to a container’s control group hierarchy—enabling socket-level Kubernetes Service load balancing (`cgroup/connect4`) before a single packet is even created.',
+    whatIsIt: {
+      heading: 'What are Cgroup v2 eBPF Hooks?',
+      paragraphs: [
+        'In Linux and Kubernetes, every container or pod is placed inside its own **Control Group v2 (cgroup v2)** directory (e.g., `/sys/fs/cgroup/kubepods.slice/pod123/`). While `kprobes` and `tracepoints` fire globally across the entire host (requiring manual cgroup ID filtering), and `XDP`/`TC` attach to network interfaces, **Cgroup eBPF programs attach directly to a cgroup v2 directory** and automatically apply to every process inside that cgroup and its descendant sub-cgroups!',
+        'Even more powerfully, socket-layer cgroup hooks like **`SEC("cgroup/connect4")`** and **`SEC("cgroup/sendmsg4")`** intercept outbound connections at the `connect()` system call layer—**before the kernel even allocates a TCP SYN packet**!',
+        'This is how **Cilium’s kube-proxy replacement** works: when a pod calls `connect(fd, 10.96.0.1:80)` (a virtual Kubernetes ClusterIP that does not exist on any physical server), Cilium’s `cgroup/connect4` program rewrites `ctx->user_ip4` and `ctx->user_port` in-place to a real backend pod IP (`10.244.1.45:8080`) in 20 nanoseconds—eliminating tens of thousands of `iptables` NAT rules!'
+      ],
+      keyTakeaways: [
+        '`SEC("cgroup/connect4")` / `SEC("cgroup/sendmsg4")` can rewrite destination IPs and ports in-place (`ctx->user_ip4 = backend_ip`) at the socket layer.',
+        '`SEC("cgroup/skb")` (`cgroup_skb/ingress` and `cgroup_skb/egress`) enforces per-pod network firewall policies and byte accounting.',
+        'Attached in Go via `link.AttachCgroup(link.CgroupOptions{Path: "/sys/fs/cgroup/...", Attach: ebpf.AttachCGroupInet4Connect, Program: prog})`.'
+      ],
+      mentalModelAnalogy:
+        'iptables DNAT is like letting an employee address a package to a virtual P.O. Box, putting it on a mail truck, driving it to the post office, and having a clerk peel off the label and stick on a new address for every single box. `cgroup/connect4` updates the address book on the employee’s desk the moment they dial the number—so every packet is addressed to the real destination from the start.'
+    },
+    howItWorks: {
+      heading: 'How `cgroup/connect4` Intercepts and Rewrites Socket Destinations',
+      paragraphs: [
+        'When any process inside the attached cgroup v2 hierarchy invokes `connect()` on an IPv4 socket, `__sys_connect()` invokes `BPF_CGROUP_RUN_PROG_INET4_CONNECT(sk, uaddr)` before entering the TCP state machine.',
+        'Your eBPF program receives a `struct bpf_sock_addr *ctx` pointer containing `ctx->user_ip4` (destination IPv4 in network byte order), `ctx->user_port` (destination port), and `ctx->protocol` (`IPPROTO_TCP` or `IPPROTO_UDP`). Returning `1` allows the connection (with any modified `user_ip4`/`user_port`), while returning `0` immediately denies the connection with `-EPERM`!'
+      ],
+      lifecycleSteps: [
+        {
+          step: '01',
+          actor: 'USERSPACE',
+          title: 'Go Attaches Program to Cgroup v2 Path',
+          detail: 'link.AttachCgroup binds the program to /sys/fs/cgroup (root or specific container cgroup).'
+        },
+        {
+          step: '02',
+          actor: 'SYSCALL',
+          title: 'Container Process Calls connect()',
+          detail: 'App dials a virtual service IP 10.96.0.10:80.'
+        },
+        {
+          step: '03',
+          actor: 'KERNEL_HOOK',
+          title: 'cgroup/connect4 Mutates bpf_sock_addr',
+          detail: 'eBPF looks up 10.96.0.10 in a service map and rewrites ctx->user_ip4 to backend pod 10.244.2.19.'
+        },
+        {
+          step: '04',
+          actor: 'KERNEL_HOOK',
+          title: 'TCP Stack Sends SYN Directly to Backend',
+          detail: 'tcp_v4_connect creates the socket already bound to 10.244.2.19—zero per-packet NAT required!'
+        }
+      ],
+      codeLanguage: 'c',
+      codeTitle: 'cgroup_connect4_lb.bpf.c — Socket-Level Virtual IP Load Balancer',
+      codeSnippet: `#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+SEC("cgroup/connect4")
+int cg_connect4_redirect(struct bpf_sock_addr *ctx) {
+    // Only intercept TCP connections to Virtual IP 10.96.0.1:80
+    if (ctx->protocol != IPPROTO_TCP)
+        return 1; // 1 = ALLOW in cgroup/connect4
+
+    if (ctx->user_ip4 == bpf_htonl(0x0A600001) && ctx->user_port == bpf_htons(80)) {
+        // Transparently rewrite destination to Backend Pod 10.244.1.50:8080
+        ctx->user_ip4 = bpf_htonl(0x0AF40132);
+        ctx->user_port = bpf_htons(8080);
+    }
+    return 1; // Allow connection with rewritten destination
+}
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";`
+    },
+    whyUseInsteadOf: {
+      heading: 'Why Use `cgroup/connect4` Instead of `iptables` NAT or TC Packet Rewriting?',
+      primaryTech: 'eBPF cgroup/connect4 (Socket Layer)',
+      alternativeTech: 'iptables KUBE-SERVICES DNAT / TC Packet NAT',
+      rationaleParagraphs: [
+        'Packet-level NAT (`iptables` or `TC`) must rewrite IP headers and recompute TCP/IP checksums on **every single packet** of a connection, and requires maintaining a heavy `nf_conntrack` table entry.',
+        '`cgroup/connect4` rewrites the destination once during `connect()`—after which every packet in the stream naturally carries the real backend IP with zero per-packet translation!'
+      ],
+      comparisonTable: [
+        {
+          dimension: 'Overhead Per Data Packet After Handshake',
+          primaryChoice: 'Zero (0 ns) — socket is natively connected to backend IP',
+          alternativeChoice: 'Per-packet conntrack lookup + IP header rewrite on every packet',
+          winner: 'primary'
+        },
+        {
+          dimension: 'Container Cgroup Scoping',
+          primaryChoice: 'Built-in — automatically scoped to the attached cgroup v2 subtree',
+          alternativeChoice: 'Global netns rules',
+          winner: 'primary'
+        },
+        {
+          dimension: 'Works for External Ingress Traffic from Outside Cluster',
+          primaryChoice: 'No — only applies to sockets created by local processes inside the cgroup',
+          alternativeChoice: 'Yes — XDP/TC handles external ingress packets arriving on NIC',
+          winner: 'alternative'
+        }
+      ],
+      whenToUsePrimary: [
+        'East-West Kubernetes Service load balancing (`kube-proxy` replacement) and per-container egress policy.'
+      ],
+      whenToUseAlternative: [
+        'North-South ingress traffic arriving from external physical routers (use XDP / TC).'
+      ]
+    },
+    comprehensionCheck: {
+      question: 'What do return values `1` and `0` mean inside a `SEC("cgroup/connect4")` or `SEC("cgroup/skb")` eBPF program?',
+      options: [
+        '`1` drops the connection and `0` allows it.',
+        '`1` ALLOWS the operation (including any in-place `ctx->user_ip4` rewrite), whereas `0` BLOCKS/DENIES the operation (returning `-EPERM` to the calling application).',
+        '`1` triggers a kernel panic.',
+        'Both `1` and `0` allow the connection.'
+      ],
+      correctIndex: 1,
+      explanation:
+        'In cgroup eBPF hooks (`cgroup/connect4`, `cgroup/skb`), return value `1` means ALLOW/PASS, while return value `0` means DENY/DROP (the opposite of LSM hooks where `0` is allow and `-EPERM` is deny!).'
+    },
+    relatedTutorialId: 'tut-mid-14-cgroup-connect4',
+    simulatorPresetId: 'preset-tc-ratelimit'
   }
 ];
+
 

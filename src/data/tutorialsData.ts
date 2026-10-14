@@ -2391,5 +2391,1069 @@ safe — tail call target type & attach_type verified`,
         'Because the context pointer R1 (struct xdp_md *) is passed directly to the tail-called program, both programs must share the exact same program type.'
     },
     simulatorPresetId: 'preset-xdp-firewall'
+  },
+  {
+    id: 'tut-beg-06-openat-unlink',
+    index: '16',
+    title: 'Tracing File Opens & Deletions (sys_enter_openat & sys_exit_openat)',
+    tier: 'beginner',
+    hookType: 'tracepoint',
+    duration: '15 min',
+    minKernel: 'Linux 5.8+',
+    summary:
+      'Correlate sys_enter_openat (__user filename string) with sys_exit_openat (returned file descriptor or -EACCES error) using a TID-keyed inflight hash map.',
+    learningObjectives: [
+      'Read __user filename pointers safely with bpf_probe_read_user_str() on sys_enter_openat.',
+      'Stash inflight syscall arguments in a BPF_MAP_TYPE_HASH keyed by full 64-bit pid_tgid.',
+      'Join entry arguments with ctx->ret in sys_exit_openat to detect failed file access attempts (-EACCES / -ENOENT).'
+    ],
+    conceptGuide: {
+      whatIsTitle: 'Why Do Syscall Tracepoints Come in sys_enter and sys_exit Pairs?',
+      whatIsContent:
+        'When a process calls openat(), the filename pointer exists at syscall entry (sys_enter_openat), but the kernel does not know whether the open will succeed or return -EACCES (-13) until the VFS finishes running (sys_exit_openat). By pairing both tracepoints via a thread-keyed BPF hash map, you get both the filename and the resulting file descriptor or error code!',
+      howItWorksTitle: 'How Thread-ID Map Correlation Works',
+      howItWorksContent:
+        'In sys_enter_openat, we use bpf_get_current_pid_tgid() (64-bit TGID+TID) as a key in an inflight hash map and save the filename string. When that same thread reaches sys_exit_openat a few microseconds later, we look up the saved filename by pid_tgid, attach ctx->ret, emit a complete RingBuffer record, and delete the map entry.',
+      whyUseInsteadTitle: 'Why Correlate Entry & Exit Instead of Only Hooking sys_enter_openat?',
+      whyUseInsteadContent:
+        'Hooking only sys_enter_openat tells you what a process tried to open, but not whether it succeeded or failed with Permission Denied (-EACCES), nor which file descriptor number was assigned.',
+      comparisonHighlight: {
+        chosenApproach: 'Paired sys_enter_openat + sys_exit_openat with TID Hash Map',
+        alternativeApproach: 'Single sys_enter_openat Hook Only',
+        overheadDelta: '+1 hash map lookup/delete (~40ns) for complete return code visibility',
+        stabilityNote: 'Always call bpf_map_delete_elem() in sys_exit so the inflight map never fills up!'
+      }
+    },
+    cFileName: 'openat_correlate.bpf.c',
+    cCode: `//go:build ignore
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+
+struct open_inflight_val {
+    __u32 flags;
+    char filename[128];
+};
+
+struct open_audit_event {
+    __u32 pid;
+    __s64 ret_fd;
+    __u32 flags;
+    char comm[16];
+    char filename[128];
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 10240);
+    __type(key, __u64); // 64-bit pid_tgid
+    __type(value, struct open_inflight_val);
+} inflight_opens SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024);
+} open_events SEC(".maps");
+
+SEC("tracepoint/syscalls/sys_enter_openat")
+int trace_enter_openat(struct trace_event_raw_sys_enter *ctx) {
+    __u64 id = bpf_get_current_pid_tgid();
+    struct open_inflight_val val = {};
+
+    const char *filename_ptr = (const char *)ctx->args[1];
+    val.flags = (__u32)ctx->args[2];
+
+    bpf_probe_read_user_str(&val.filename, sizeof(val.filename), filename_ptr);
+    bpf_map_update_elem(&inflight_opens, &id, &val, BPF_ANY);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_openat")
+int trace_exit_openat(struct trace_event_raw_sys_exit *ctx) {
+    __u64 id = bpf_get_current_pid_tgid();
+    struct open_inflight_val *val = bpf_map_lookup_elem(&inflight_opens, &id);
+    if (!val)
+        return 0;
+
+    struct open_audit_event *e = bpf_ringbuf_reserve(&open_events, sizeof(*e), 0);
+    if (e) {
+        e->pid = id >> 32;
+        e->ret_fd = ctx->ret;
+        e->flags = val->flags;
+        bpf_get_current_comm(&e->comm, sizeof(e->comm));
+        __builtin_memcpy(&e->filename, val->filename, sizeof(e->filename));
+        bpf_ringbuf_submit(e, 0);
+    }
+
+    bpf_map_delete_elem(&inflight_opens, &id);
+    return 0;
+}
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";`,
+    goFileName: 'main.go',
+    goCode: `package main
+
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"log"
+
+	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/ringbuf"
+	"golang.org/x/sys/unix"
+)
+
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type open_audit_event bpf openat_correlate.bpf.c
+
+func main() {
+	var objs bpfObjects
+	if err := loadBpfObjects(&objs, nil); err != nil {
+		log.Fatal(err)
+	}
+	defer objs.Close()
+
+	tpEnter, err := link.Tracepoint("syscalls", "sys_enter_openat", objs.TraceEnterOpenat, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer tpEnter.Close()
+
+	tpExit, err := link.Tracepoint("syscalls", "sys_exit_openat", objs.TraceExitOpenat, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer tpExit.Close()
+
+	rd, err := ringbuf.NewReader(objs.OpenEvents)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rd.Close()
+
+	var evt bpfOpenAuditEvent
+	for {
+		rec, err := rd.Read()
+		if err != nil {
+			break
+		}
+		_ = binary.Read(bytes.NewBuffer(rec.RawSample), binary.LittleEndian, &evt)
+		fmt.Printf("PID=%d (%s) openat(%q) => ret=%d\n",
+			evt.Pid,
+			unix.ByteSliceToString(evt.Comm[:]),
+			unix.ByteSliceToString(evt.Filename[:]),
+			evt.RetFd,
+		)
+	}
+}`,
+    steps: [
+      {
+        stepNumber: 1,
+        title: 'Capture __user Filename on sys_enter_openat',
+        explanation:
+          'ctx->args[1] holds the userspace filename pointer. We copy it safely with bpf_probe_read_user_str() and store it in inflight_opens keyed by the 64-bit pid_tgid.',
+        activePipelineNode: 'hook',
+        cHighlightLines: [30, 41],
+        goHighlightLines: [21, 25],
+        keyInsight: 'Using the full 64-bit pid_tgid prevents thread collisions in multi-threaded Go/Java apps.'
+      },
+      {
+        stepNumber: 2,
+        title: 'Join with Return Code & Clean Up Map in sys_exit_openat',
+        explanation:
+          'When openat finishes, we look up inflight_opens, combine the saved filename with ctx->ret (the FD or negative -errno), submit to RingBuf, and delete the map key.',
+        activePipelineNode: 'ringbuf',
+        cHighlightLines: [43, 62],
+        goHighlightLines: [27, 48],
+        keyInsight: 'Always delete the inflight map entry even if bpf_ringbuf_reserve fails!'
+      }
+    ],
+    verifierChallenge: {
+      title: 'Fix Kernel vs. User Address Space Helper Bug',
+      prompt:
+        'Using bpf_probe_read_kernel_str() on a syscall argument pointer (const char __user *filename) fails on modern CPUs with SMAP/PAN!',
+      buggySnippet: `const char *filename_ptr = (const char *)ctx->args[1];
+// BUG: filename_ptr is a __user address, not a kernel address!
+bpf_probe_read_kernel_str(&val.filename, sizeof(val.filename), filename_ptr);`,
+      fixedSnippet: `const char *filename_ptr = (const char *)ctx->args[1];
+bpf_probe_read_user_str(&val.filename, sizeof(val.filename), filename_ptr);`,
+      verifierErrorOutput: `Runtime SMAP fault (-EFAULT): attempted kernel read on __user address 0x7ffc8a910420`,
+      verifierPassOutput: `14: (85) call bpf_probe_read_user_str#114
+safe — user-space page-fault-tolerant string copy verified`,
+      explanation:
+        'System call pointer arguments point into user-space virtual memory and must always be read with bpf_probe_read_user() or bpf_probe_read_user_str().'
+    },
+    simulatorPresetId: 'preset-syscall-execve'
+  },
+  {
+    id: 'tut-beg-07-core-ancestry',
+    index: '17',
+    title: 'Process Ancestry & Container Escape Detection with BPF_CORE_READ',
+    tier: 'beginner',
+    hookType: 'kprobe',
+    duration: '16 min',
+    minKernel: 'Linux 5.5+',
+    summary:
+      'Use BPF_KPROBE and variadic BPF_CORE_READ() macros to walk task->real_parent->real_parent pointer chains and detect suspicious web-server shell spawns.',
+    learningObjectives: [
+      'Unpack function arguments portably across x86_64 and ARM64 using BPF_KPROBE.',
+      'Chain multi-hop pointer dereferences in a single BPF_CORE_READ(task, real_parent, tgid) call.',
+      'Extract grandparent PID and command name (comm) to spot reverse-shell process trees (e.g., nginx -> sh -> curl).'
+    ],
+    conceptGuide: {
+      whatIsTitle: 'What is Multi-Hop Pointer Chasing in eBPF?',
+      whatIsContent:
+        'In Linux, every process is represented by a struct task_struct containing a pointer to its parent process (task->real_parent), which in turn points to the grandparent process (task->real_parent->real_parent). Walking this ancestry chain inside eBPF lets you immediately see that a curl command was spawned by /bin/sh inside an nginx worker!',
+      howItWorksTitle: 'How Variadic BPF_CORE_READ() Chases Pointers Safely',
+      howItWorksContent:
+        'Instead of writing three separate bpf_probe_read_kernel() calls with temporary stack variables, BPF_CORE_READ(task, real_parent, real_parent, tgid) automatically expands into nested CO-RE relocated kernel reads.',
+      whyUseInsteadTitle: 'Why Capture Process Ancestry in Kernel Instead of Querying /proc/<ppid> in Userspace?',
+      whyUseInsteadContent:
+        'Attackers frequently use double-fork tricks where the intermediate parent shell exits in 1 millisecond—long before a userspace agent can read /proc/<ppid>/stat! Reading task->real_parent inside the kernel hook captures the exact parent at the microsecond of execution.',
+      comparisonHighlight: {
+        chosenApproach: 'In-Kernel BPF_CORE_READ(task, real_parent, ...)',
+        alternativeApproach: 'Userspace /proc/<ppid>/status Polling',
+        overheadDelta: 'Zero race conditions against short-lived double-forked processes',
+        stabilityNote: 'Always use real_parent (actual spawning process) rather than parent (which changes under ptrace/gdb).'
+      }
+    },
+    cFileName: 'process_ancestry.bpf.c',
+    cCode: `//go:build ignore
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+
+struct ancestry_event {
+    __u32 pid;
+    __u32 ppid;
+    __u32 gppid;
+    char comm[16];
+    char parent_comm[16];
+    char grandparent_comm[16];
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024);
+} lineage_rb SEC(".maps");
+
+SEC("kprobe/wake_up_new_task")
+int BPF_KPROBE(kp_wake_up_new_task, struct task_struct *child) {
+    struct ancestry_event *e = bpf_ringbuf_reserve(&lineage_rb, sizeof(*e), 0);
+    if (!e)
+        return 0;
+
+    e->pid   = BPF_CORE_READ(child, tgid);
+    e->ppid  = BPF_CORE_READ(child, real_parent, tgid);
+    e->gppid = BPF_CORE_READ(child, real_parent, real_parent, tgid);
+
+    BPF_CORE_READ_STR_INTO(&e->comm, child, comm);
+    BPF_CORE_READ_STR_INTO(&e->parent_comm, child, real_parent, comm);
+    BPF_CORE_READ_STR_INTO(&e->grandparent_comm, child, real_parent, real_parent, comm);
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";`,
+    goFileName: 'main.go',
+    goCode: `package main
+
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"log"
+
+	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/ringbuf"
+	"golang.org/x/sys/unix"
+)
+
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type ancestry_event bpf process_ancestry.bpf.c
+
+func main() {
+	var objs bpfObjects
+	if err := loadBpfObjects(&objs, nil); err != nil {
+		log.Fatal(err)
+	}
+	defer objs.Close()
+
+	kp, err := link.Kprobe("wake_up_new_task", objs.KpWakeUpNewTask, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer kp.Close()
+
+	rd, err := ringbuf.NewReader(objs.LineageRb)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rd.Close()
+
+	var evt bpfAncestryEvent
+	for {
+		rec, err := rd.Read()
+		if err != nil {
+			break
+		}
+		_ = binary.Read(bytes.NewBuffer(rec.RawSample), binary.LittleEndian, &evt)
+		fmt.Printf("[Process Tree] %s(%d) -> %s(%d) -> %s(%d)\n",
+			unix.ByteSliceToString(evt.GrandparentComm[:]), evt.Gppid,
+			unix.ByteSliceToString(evt.ParentComm[:]), evt.Ppid,
+			unix.ByteSliceToString(evt.Comm[:]), evt.Pid,
+		)
+	}
+}`,
+    steps: [
+      {
+        stepNumber: 1,
+        title: 'Hook wake_up_new_task with BPF_KPROBE',
+        explanation:
+          'wake_up_new_task(struct task_struct *child) is called by the kernel scheduler whenever a newly forked/cloned task is about to run for the first time.',
+        activePipelineNode: 'hook',
+        cHighlightLines: [21, 25],
+        goHighlightLines: [21, 25],
+        keyInsight: 'BPF_KPROBE automatically extracts the first argument (struct task_struct *child) from PT_REGS_PARM1(ctx).'
+      },
+      {
+        stepNumber: 2,
+        title: 'Read 3 Generations of Process Lineage with BPF_CORE_READ',
+        explanation:
+          'BPF_CORE_READ and BPF_CORE_READ_STR_INTO traverse child -> real_parent -> real_parent in one line and copy each comm string into the Ring Buffer.',
+        activePipelineNode: 'ringbuf',
+        cHighlightLines: [27, 36],
+        goHighlightLines: [34, 46],
+        keyInsight: 'Even if an intermediate pointer were NULL, bpf_probe_read_kernel safely zeroes the output rather than panicking.'
+      }
+    ],
+    verifierChallenge: {
+      title: 'Fix Hardcoded Architecture Register Access in Kprobe',
+      prompt:
+        'Reading ctx->di directly in a kprobe fails to compile on ARM64 (where argument 1 is stored in regs[0], not rdi). Use PT_REGS_PARM1 or BPF_KPROBE!',
+      buggySnippet: `SEC("kprobe/wake_up_new_task")
+int kp_wake_up_new_task(struct pt_regs *ctx) {
+    // BUG: ctx->di only exists on x86_64! Fails on ARM64 Graviton / Apple Silicon!
+    struct task_struct *child = (struct task_struct *)ctx->di;
+    return 0;
+}`,
+      fixedSnippet: `SEC("kprobe/wake_up_new_task")
+int BPF_KPROBE(kp_wake_up_new_task, struct task_struct *child) {
+    __u32 pid = BPF_CORE_READ(child, tgid);
+    return 0;
+}`,
+      verifierErrorOutput: `error: no member named 'di' in 'struct user_pt_regs' (target: bpfel / arm64)`,
+      verifierPassOutput: `BPF_KPROBE expanded to PT_REGS_PARM1(ctx)
+safe — cross-architecture register ABI verified`,
+      explanation:
+        'BPF_KPROBE and PT_REGS_PARM1() abstract CPU register names across x86_64, ARM64, RISC-V, and s390x.'
+    },
+    simulatorPresetId: 'preset-syscall-execve'
+  },
+  {
+    id: 'tut-mid-13-fentry-fexit',
+    index: '18',
+    title: 'Zero-Overhead Function Profiling with fentry & fexit BTF Trampolines',
+    tier: 'intermediate',
+    hookType: 'fexit',
+    duration: '18 min',
+    minKernel: 'Linux 5.5+',
+    summary:
+      'Replace legacy kprobe + kretprobe pairs with a single BTF-typed fexit trampoline that accesses both input arguments and the return value simultaneously at 10x lower overhead.',
+    learningObjectives: [
+      'Declare a BTF-enabled SEC("fexit/...") program using the BPF_PROG macro.',
+      'Access both input struct pointers (like struct sock *sk) and the function return value in the same fexit hook.',
+      'Attach fentry/fexit programs in Go via link.AttachTracing(link.TracingOptions{Program: ...}).'
+    ],
+    conceptGuide: {
+      whatIsTitle: 'What Are fentry and fexit BPF Trampolines?',
+      whatIsContent:
+        'Introduced in Linux 5.5, fentry (function entry) and fexit (function exit) replace CPU breakpoint traps (int3) with direct native call trampolines at the 5-byte NOP ftrace header of kernel functions. Even better, fexit receives all input arguments PLUS the return value together!',
+      howItWorksTitle: 'How BTF Direct Memory Access Works in fentry/fexit',
+      howItWorksContent:
+        'Because the kernel Verifier knows the exact BTF signature of the hooked function, pointers passed to BPF_PROG are trusted PTR_TO_BTF_ID registers. You can read sk->__sk_common.skc_daddr directly using normal C arrow syntax without calling bpf_probe_read_kernel()!',
+      whyUseInsteadTitle: 'Why Use fexit Instead of kretprobe?',
+      whyUseInsteadContent:
+        'In a kretprobe, input arguments are lost when the function returns, forcing you to attach a second kprobe at entry and stash arguments in a BPF hash map. fexit preserves input arguments in the trampoline stack frame automatically!',
+      comparisonHighlight: {
+        chosenApproach: 'SEC("fexit/tcp_connect") BTF Trampoline',
+        alternativeApproach: 'kprobe + kretprobe + Hash Map Correlation',
+        overheadDelta: '~30ns direct call vs ~350ns dual int3 trap + map lookup',
+        stabilityNote: 'Attached in Go via link.AttachTracing(link.TracingOptions{Program: objs.FexitTcpConnect}).'
+      }
+    },
+    cFileName: 'fexit_tcp_connect.bpf.c',
+    cCode: `//go:build ignore
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_endian.h>
+
+struct tcp_conn_result {
+    __u32 pid;
+    __u32 saddr;
+    __u32 daddr;
+    __u16 dport;
+    __s32 ret;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024);
+} conn_rb SEC(".maps");
+
+// Kernel signature: int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
+// In fexit, BPF_PROG receives all 3 input parameters PLUS the return value (int ret) last!
+SEC("fexit/tcp_v4_connect")
+int BPF_PROG(fexit_tcp_v4_connect, struct sock *sk, struct sockaddr *uaddr, int addr_len, int ret) {
+    struct tcp_conn_result *e = bpf_ringbuf_reserve(&conn_rb, sizeof(*e), 0);
+    if (!e)
+        return 0;
+
+    e->pid   = bpf_get_current_pid_tgid() >> 32;
+    // Direct BTF pointer access — no bpf_probe_read_kernel required!
+    e->saddr = sk->__sk_common.skc_rcv_saddr;
+    e->daddr = sk->__sk_common.skc_daddr;
+    e->dport = __bpf_ntohs(sk->__sk_common.skc_dport);
+    e->ret   = ret;
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";`,
+    goFileName: 'main.go',
+    goCode: `package main
+
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"log"
+	"net"
+
+	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/ringbuf"
+)
+
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type tcp_conn_result bpf fexit_tcp_connect.bpf.c
+
+func main() {
+	var objs bpfObjects
+	if err := loadBpfObjects(&objs, nil); err != nil {
+		log.Fatal(err)
+	}
+	defer objs.Close()
+
+	// Attach BTF fexit trampoline via link.AttachTracing
+	tr, err := link.AttachTracing(link.TracingOptions{
+		Program: objs.FexitTcpV4Connect,
+	})
+	if err != nil {
+		log.Fatalf("attaching fexit trampoline: %v", err)
+	}
+	defer tr.Close()
+
+	rd, err := ringbuf.NewReader(objs.ConnRb)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rd.Close()
+
+	var res bpfTcpConnResult
+	for {
+		rec, err := rd.Read()
+		if err != nil {
+			break
+		}
+		_ = binary.Read(bytes.NewBuffer(rec.RawSample), binary.LittleEndian, &res)
+		dstIP := make(net.IP, 4)
+		binary.LittleEndian.PutUint32(dstIP, res.Daddr)
+		fmt.Printf("PID=%d tcp_v4_connect -> %s:%d (ret=%d)\n", res.Pid, dstIP, res.Dport, res.Ret)
+	}
+}`,
+    steps: [
+      {
+        stepNumber: 1,
+        title: 'Declare SEC("fexit/tcp_v4_connect") with BPF_PROG',
+        explanation:
+          'BPF_PROG unpacks the 64-bit trampoline context array into typed parameters: (struct sock *sk, struct sockaddr *uaddr, int addr_len, int ret).',
+        activePipelineNode: 'hook',
+        cHighlightLines: [20, 24],
+        goHighlightLines: [21, 28],
+        keyInsight: 'Notice how fexit gives you both struct sock *sk (which sk_daddr was populated into during the call) AND int ret!'
+      },
+      {
+        stepNumber: 2,
+        title: 'Direct BTF Pointer Dereference & link.AttachTracing',
+        explanation:
+          'Because sk has verifier type PTR_TO_BTF_ID, sk->__sk_common.skc_daddr compiles to a single native CPU load instruction.',
+        activePipelineNode: 'verifier',
+        cHighlightLines: [28, 35],
+        goHighlightLines: [36, 48],
+        keyInsight: 'In Go, fentry and fexit programs are attached using link.AttachTracing rather than link.Kprobe.'
+      }
+    ],
+    verifierChallenge: {
+      title: 'Fix BPF_KPROBE vs. BPF_PROG Macro Mismatch in fentry/fexit',
+      prompt:
+        'Using BPF_KPROBE on an fentry/fexit hook fails because fentry/fexit passes a raw uint64_t args[] array, not a struct pt_regs * register frame!',
+      buggySnippet: `SEC("fexit/tcp_v4_connect")
+// BUG: BPF_KPROBE expects struct pt_regs *, but fexit passes unsigned long long *ctx!
+int BPF_KPROBE(fexit_tcp_v4_connect, struct sock *sk, struct sockaddr *uaddr, int addr_len) {
+    return 0;
+}`,
+      fixedSnippet: `SEC("fexit/tcp_v4_connect")
+// FIXED: BPF_PROG unpacks the BTF trampoline ctx[] array including return value ret
+int BPF_PROG(fexit_tcp_v4_connect, struct sock *sk, struct sockaddr *uaddr, int addr_len, int ret) {
+    return 0;
+}`,
+      verifierErrorOutput: `invalid bpf_context access off=112 size=8: fexit context only has 32 bytes (4 args × 8B)`,
+      verifierPassOutput: `BTF trampoline verified: 3 input args + 1 return value (32 bytes)
+safe — PTR_TO_BTF_ID(struct sock) direct access enabled`,
+      explanation:
+        'Always pair kprobe/uprobe with BPF_KPROBE, and pair fentry/fexit/lsm/tp_btf with BPF_PROG.'
+    },
+    simulatorPresetId: 'preset-tcp-latency'
+  },
+  {
+    id: 'tut-mid-14-cgroup-connect4',
+    index: '19',
+    title: 'Container Socket Load Balancing & Egress Policy with cgroup/connect4',
+    tier: 'intermediate',
+    hookType: 'cgroup',
+    duration: '19 min',
+    minKernel: 'Linux 4.17+',
+    summary:
+      'Intercept outbound IPv4 connect() calls inside a container cgroup v2 hierarchy to transparently redirect Virtual Service IPs to backend pods before a single SYN packet is sent.',
+    learningObjectives: [
+      'Write a SEC("cgroup/connect4") program receiving struct bpf_sock_addr *ctx.',
+      'Rewrite ctx->user_ip4 and ctx->user_port in-place to redirect connections at the socket layer.',
+      'Attach the program to a cgroup v2 directory in Go via link.AttachCgroup.'
+    ],
+    conceptGuide: {
+      whatIsTitle: 'How Does Socket-Layer Load Balancing (kube-proxy Replacement) Work?',
+      whatIsContent:
+        'When a microservice dials a Kubernetes Service Virtual IP (like 10.96.0.1:80), traditional kube-proxy lets the kernel create a TCP packet to 10.96.0.1 and then uses iptables DNAT to rewrite the packet header on every packet. With SEC("cgroup/connect4"), eBPF intercepts the connect() syscall and updates ctx->user_ip4 to the backend pod IP (e.g. 10.244.1.40:8080) before the TCP handshake even starts!',
+      howItWorksTitle: 'How Return Values Work in cgroup/connect4',
+      howItWorksContent:
+        'In cgroup/connect4, returning 1 ALLOWS the connection (using whatever user_ip4 and user_port values are currently in ctx), while returning 0 DENIES the connection immediately with -EPERM (Operation not permitted).',
+      whyUseInsteadTitle: 'Why Use cgroup/connect4 Instead of TC/iptables Packet NAT?',
+      whyUseInsteadContent:
+        'Socket-layer redirection executes only once per TCP connection during connect(), reducing per-packet NAT overhead to zero for the entire lifetime of the connection!',
+      comparisonHighlight: {
+        chosenApproach: 'SEC("cgroup/connect4") Socket Destination Rewrite',
+        alternativeApproach: 'iptables DNAT + nf_conntrack per-packet translation',
+        overheadDelta: '0 ns per data packet after connect(); no conntrack table pressure',
+        stabilityNote: 'Remember: in cgroup hooks, 1 = ALLOW and 0 = DENY!'
+      }
+    },
+    cFileName: 'cgroup_lb.bpf.c',
+    cCode: `//go:build ignore
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+struct vip_key {
+    __u32 vip;
+    __u16 vport;
+    __u16 pad;
+};
+
+struct backend_val {
+    __u32 backend_ip;
+    __u16 backend_port;
+    __u16 pad;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, struct vip_key);
+    __type(value, struct backend_val);
+} service_lb_map SEC(".maps");
+
+SEC("cgroup/connect4")
+int cg_sock_connect4(struct bpf_sock_addr *ctx) {
+    if (ctx->protocol != IPPROTO_TCP)
+        return 1; // 1 = ALLOW non-TCP connections untouched
+
+    struct vip_key key = {
+        .vip   = ctx->user_ip4,
+        .vport = __bpf_ntohs(ctx->user_port),
+    };
+
+    struct backend_val *dst = bpf_map_lookup_elem(&service_lb_map, &key);
+    if (!dst)
+        return 1; // Not a virtual service IP; allow normal connect
+
+    // Rewrite destination IP and port in-place before TCP SYN is generated!
+    ctx->user_ip4  = dst->backend_ip;
+    ctx->user_port = __bpf_htons(dst->backend_port);
+    return 1; // 1 = ALLOW connection with rewritten destination
+}
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";`,
+    goFileName: 'main.go',
+    goCode: `package main
+
+import (
+	"encoding/binary"
+	"log"
+	"net"
+
+	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/link"
+)
+
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go bpf cgroup_lb.bpf.c
+
+func ipToUint32(ipStr string) uint32 {
+	ip := net.ParseIP(ipStr).To4()
+	return binary.LittleEndian.Uint32(ip)
+}
+
+func main() {
+	var objs bpfObjects
+	if err := loadBpfObjects(&objs, nil); err != nil {
+		log.Fatal(err)
+	}
+	defer objs.Close()
+
+	// Map Virtual Service 10.96.0.1:80 -> Backend Pod 10.244.1.50:8080
+	key := bpfVipKey{Vip: ipToUint32("10.96.0.1"), Vport: 80}
+	val := bpfBackendVal{BackendIp: ipToUint32("10.244.1.50"), BackendPort: 8080}
+	if err := objs.ServiceLbMap.Put(&key, &val); err != nil {
+		log.Fatal(err)
+	}
+
+	cg, err := link.AttachCgroup(link.CgroupOptions{
+		Path:    "/sys/fs/cgroup",
+		Attach:  ebpf.AttachCGroupInet4Connect,
+		Program: objs.CgSockConnect4,
+	})
+	if err != nil {
+		log.Fatalf("attaching cgroup/connect4: %v", err)
+	}
+	defer cg.Close()
+	log.Println("Cgroup v2 socket load balancer active!")
+}`,
+    steps: [
+      {
+        stepNumber: 1,
+        title: 'Look Up Destination VIP in service_lb_map',
+        explanation:
+          'When a process calls connect(), ctx->user_ip4 and ctx->user_port hold the target address. We look up that pair in service_lb_map.',
+        activePipelineNode: 'map',
+        cHighlightLines: [25, 37],
+        goHighlightLines: [25, 31],
+        keyInsight: 'ctx->user_port is stored in network byte order (big-endian), so use __bpf_ntohs / __bpf_htons.'
+      },
+      {
+        stepNumber: 2,
+        title: 'Mutate ctx->user_ip4 In-Place & Attach to Cgroup v2',
+        explanation:
+          'Overwriting ctx->user_ip4 and ctx->user_port redirects the socket transparently before tcp_v4_connect runs.',
+        activePipelineNode: 'hook',
+        cHighlightLines: [39, 43],
+        goHighlightLines: [33, 41],
+        keyInsight: 'Returning 1 permits the connection; returning 0 blocks the connection with EPERM.'
+      }
+    ],
+    verifierChallenge: {
+      title: 'Fix Inverted Return Code in Cgroup Socket Hook',
+      prompt:
+        'Unlike kprobes or LSM hooks (where 0 means success/allow), returning 0 from cgroup/connect4 or cgroup/skb DROPS/BLOCKS every connection in the container!',
+      buggySnippet: `SEC("cgroup/connect4")
+int cg_sock_connect4(struct bpf_sock_addr *ctx) {
+    // BUG: Returning 0 in cgroup/connect4 DENIES all outbound connections with -EPERM!
+    return 0;
+}`,
+      fixedSnippet: `SEC("cgroup/connect4")
+int cg_sock_connect4(struct bpf_sock_addr *ctx) {
+    // FIXED: Return 1 to allow the connection in cgroup hooks
+    return 1;
+}`,
+      verifierErrorOutput: `Runtime policy bug: return 0 in BPF_CGROUP_INET4_CONNECT rejects syscall with -EPERM`,
+      verifierPassOutput: `24: (b7) r0 = 1 ; CGROUP_ALLOW
+safe — valid cgroup verdict range [0, 1] verified`,
+      explanation:
+        'In cgroup/connect4 and cgroup/skb, return 1 means ALLOW and return 0 means DENY.'
+    },
+    simulatorPresetId: 'preset-tc-ratelimit'
+  },
+  {
+    id: 'tut-adv-20-fileless-memfd',
+    index: '20',
+    title: 'Detecting Fileless Malware Execution (memfd_create + execveat)',
+    tier: 'advanced',
+    hookType: 'tracepoint',
+    duration: '22 min',
+    minKernel: 'Linux 5.8+',
+    summary:
+      'Build a runtime security detector that catches in-memory ELF payload execution via memfd_create() and AT_EMPTY_PATH execveat() syscalls without touching disk.',
+    learningObjectives: [
+      'Understand how Linux fileless malware uses memfd_create() to create anonymous RAM-backed files.',
+      'Hook sys_enter_memfd_create and sys_enter_execveat to flag anonymous fd execution (AT_EMPTY_PATH = 0x1000).',
+      'Stream high-severity forensic alerts to Go userspace over a BPF Ring Buffer.'
+    ],
+    conceptGuide: {
+      whatIsTitle: 'How Does Fileless Malware Evade Disk Antivirus on Linux?',
+      whatIsContent:
+        'Traditional security scanners watch filesystem writes on disk. Sophisticated attackers bypass disk inspection entirely by calling memfd_create("", MFD_CLOEXEC), writing a downloaded ELF binary directly into the returned RAM file descriptor, and executing `/proc/self/fd/<fd>` via execveat(fd, "", argv, envp, AT_EMPTY_PATH)!',
+      howItWorksTitle: 'How Multi-Syscall eBPF Correlation Spots In-Memory Execution',
+      howItWorksContent:
+        'By hooking tracepoint/syscalls/sys_enter_memfd_create and tracepoint/syscalls/sys_enter_execveat, our eBPF program records processes that allocate anonymous memory files and immediately alerts when execveat is called with AT_EMPTY_PATH (0x1000) or a /proc/self/fd path.',
+      whyUseInsteadTitle: 'Why Detect Fileless Execution in eBPF Instead of File Integrity Monitoring (FIM)?',
+      whyUseInsteadContent:
+        'FIM tools (like inotify/fanotify on disk mounts) never see anonymous tmpfs/ramfs memfd files because no disk inode is ever created. Syscall and LSM hooks in eBPF catch every execution regardless of backing storage.',
+      comparisonHighlight: {
+        chosenApproach: 'eBPF memfd_create + execveat Syscall Correlation',
+        alternativeApproach: 'Disk-Based File Integrity Monitoring (FIM)',
+        overheadDelta: '100% visibility into RAM-backed anonymous ELF execution',
+        stabilityNote: 'Combine with lsm/bprm_check_security to block memfd execution inline!'
+      }
+    },
+    cFileName: 'fileless_detect.bpf.c',
+    cCode: `//go:build ignore
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+
+#define AT_EMPTY_PATH 0x1000
+
+struct fileless_alert {
+    __u32 pid;
+    __u32 uid;
+    __u32 flags;
+    char alert_type[16];
+    char comm[16];
+    char name[64];
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024);
+} alerts SEC(".maps");
+
+SEC("tracepoint/syscalls/sys_enter_memfd_create")
+int trace_memfd_create(struct trace_event_raw_sys_enter *ctx) {
+    struct fileless_alert *a = bpf_ringbuf_reserve(&alerts, sizeof(*a), 0);
+    if (!a)
+        return 0;
+
+    a->pid   = bpf_get_current_pid_tgid() >> 32;
+    a->uid   = bpf_get_current_uid_gid();
+    a->flags = (__u32)ctx->args[1];
+    __builtin_memcpy(a->alert_type, "MEMFD_CREATE", 13);
+    bpf_get_current_comm(&a->comm, sizeof(a->comm));
+
+    const char *uname = (const char *)ctx->args[0];
+    bpf_probe_read_user_str(&a->name, sizeof(a->name), uname);
+
+    bpf_ringbuf_submit(a, 0);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_execveat")
+int trace_execveat(struct trace_event_raw_sys_enter *ctx) {
+    __u32 flags = (__u32)ctx->args[4];
+    struct fileless_alert *a = bpf_ringbuf_reserve(&alerts, sizeof(*a), 0);
+    if (!a)
+        return 0;
+
+    a->pid   = bpf_get_current_pid_tgid() >> 32;
+    a->uid   = bpf_get_current_uid_gid();
+    a->flags = flags;
+    __builtin_memcpy(a->alert_type, (flags & AT_EMPTY_PATH) ? "FD_EXECVEAT" : "EXECVEAT", 12);
+    bpf_get_current_comm(&a->comm, sizeof(a->comm));
+
+    const char *path = (const char *)ctx->args[1];
+    bpf_probe_read_user_str(&a->name, sizeof(a->name), path);
+
+    bpf_ringbuf_submit(a, 0);
+    return 0;
+}
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";`,
+    goFileName: 'main.go',
+    goCode: `package main
+
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"log"
+
+	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/ringbuf"
+	"golang.org/x/sys/unix"
+)
+
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type fileless_alert bpf fileless_detect.bpf.c
+
+func main() {
+	var objs bpfObjects
+	if err := loadBpfObjects(&objs, nil); err != nil {
+		log.Fatal(err)
+	}
+	defer objs.Close()
+
+	tpMemfd, err := link.Tracepoint("syscalls", "sys_enter_memfd_create", objs.TraceMemfdCreate, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer tpMemfd.Close()
+
+	tpExec, err := link.Tracepoint("syscalls", "sys_enter_execveat", objs.TraceExecveat, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer tpExec.Close()
+
+	rd, err := ringbuf.NewReader(objs.Alerts)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rd.Close()
+
+	var al bpfFilelessAlert
+	for {
+		rec, err := rd.Read()
+		if err != nil {
+			break
+		}
+		_ = binary.Read(bytes.NewBuffer(rec.RawSample), binary.LittleEndian, &al)
+		fmt.Printf("[SECURITY ALERT: %s] PID=%d UID=%d COMM=%s target=%q flags=0x%x\n",
+			unix.ByteSliceToString(al.AlertType[:]),
+			al.Pid, al.Uid,
+			unix.ByteSliceToString(al.Comm[:]),
+			unix.ByteSliceToString(al.Name[:]),
+			al.Flags,
+		)
+	}
+}`,
+    steps: [
+      {
+        stepNumber: 1,
+        title: 'Monitor Anonymous RAM File Creation (sys_enter_memfd_create)',
+        explanation:
+          'ctx->args[0] holds the anonymous memfd name and ctx->args[1] holds flags (MFD_CLOEXEC). We log every process creating an in-memory file descriptor.',
+        activePipelineNode: 'hook',
+        cHighlightLines: [21, 38],
+        goHighlightLines: [21, 25],
+        keyInsight: 'Legitimate apps rarely call memfd_create followed by execve/execveat inside a container.'
+      },
+      {
+        stepNumber: 2,
+        title: 'Detect Descriptor Execution via sys_enter_execveat',
+        explanation:
+          'When execveat is called with AT_EMPTY_PATH (0x1000), the kernel executes the open file descriptor passed in args[0] directly from RAM.',
+        activePipelineNode: 'ringbuf',
+        cHighlightLines: [40, 58],
+        goHighlightLines: [27, 50],
+        keyInsight: 'Checking (flags & AT_EMPTY_PATH) immediately identifies descriptor-based binary execution.'
+      }
+    ],
+    verifierChallenge: {
+      title: 'Fix Unreleased RingBuffer Reservation Leak on Conditional Branch',
+      prompt:
+        'If you reserve a RingBuffer slot via bpf_ringbuf_reserve() and return early on a branch without calling bpf_ringbuf_submit() or bpf_ringbuf_discard(), the Verifier rejects the program for leaking a reference!',
+      buggySnippet: `struct fileless_alert *a = bpf_ringbuf_reserve(&alerts, sizeof(*a), 0);
+if (!a) return 0;
+if (flags == 0) {
+    // BUG: Returning without submitting or discarding 'a' leaks the ringbuf reference!
+    return 0;
+}
+bpf_ringbuf_submit(a, 0);`,
+      fixedSnippet: `struct fileless_alert *a = bpf_ringbuf_reserve(&alerts, sizeof(*a), 0);
+if (!a) return 0;
+if (flags == 0) {
+    bpf_ringbuf_discard(a, 0);
+    return 0;
+}
+bpf_ringbuf_submit(a, 0);`,
+      verifierErrorOutput: `Unreleased reference id=2 alloc_insn=6 (must call bpf_ringbuf_submit or bpf_ringbuf_discard before exit)`,
+      verifierPassOutput: `All paths release alloc_mem_or_null(id=2)
+safe — reference tracking verified`,
+      explanation:
+        'Either filter before calling bpf_ringbuf_reserve(), or call bpf_ringbuf_discard(a, 0) on every abort path.'
+    },
+    simulatorPresetId: 'preset-lsm-security'
+  },
+  {
+    id: 'tut-adv-21-spinlock-timer',
+    index: '21',
+    title: 'Concurrency-Safe Token Bucket Rate Limiter with bpf_spin_lock',
+    tier: 'advanced',
+    hookType: 'XDP',
+    duration: '23 min',
+    minKernel: 'Linux 5.1+',
+    summary:
+      'Protect multi-field token-bucket state across CPU cores using struct bpf_spin_lock inside a BTF-typed BPF map without race conditions.',
+    learningObjectives: [
+      'Embed struct bpf_spin_lock inside a BTF-defined BPF map value struct.',
+      'Acquire and release locks with bpf_spin_lock(&b->lock) and bpf_spin_unlock(&b->lock).',
+      'Satisfy the Verifier’s strict critical-section rules (no helper calls while holding a spinlock!).'
+    ],
+    conceptGuide: {
+      whatIsTitle: 'Why Do Multi-Field Map Updates Need bpf_spin_lock?',
+      whatIsContent:
+        'A token bucket rate limiter must read last_refill_ns, compute elapsed time, add tokens, and decrement tokens atomically for a shared source IP across all CPU cores. Without a spinlock, two cores processing packets from the same IP simultaneously will overwrite each other’s token balance!',
+      howItWorksTitle: 'How the Verifier Enforces Deadlock-Free Spinlocks',
+      howItWorksContent:
+        'The Verifier enforces three ironclad rules on bpf_spin_lock: (1) You can only hold ONE spinlock at a time, (2) You CANNOT call any BPF helper functions inside the critical section (so call bpf_ktime_get_ns() BEFORE acquiring the lock!), and (3) Every exit path must call bpf_spin_unlock().',
+      whyUseInsteadTitle: 'Why Use bpf_spin_lock Instead of __sync_fetch_and_add?',
+      whyUseInsteadContent:
+        'Atomic instructions (__sync_fetch_and_add) can only update a single 64-bit integer. Updating two coupled fields (tokens AND last_ts) invariants atomically requires bpf_spin_lock.',
+      comparisonHighlight: {
+        chosenApproach: 'struct bpf_spin_lock Inside BTF Hash Map Value',
+        alternativeApproach: 'Unlocked Read-Modify-Write Across Cores',
+        overheadDelta: '100% race-free multi-field state transitions across all CPUs',
+        stabilityNote: 'Always call bpf_ktime_get_ns() BEFORE bpf_spin_lock() because helpers are forbidden inside spinlocks!'
+      }
+    },
+    cFileName: 'spinlock_ratelimit.bpf.c',
+    cCode: `//go:build ignore
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+struct token_bucket {
+    struct bpf_spin_lock lock;
+    __u64 last_ts_ns;
+    __u64 tokens;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, __u32); // Source IPv4
+    __type(value, struct token_bucket);
+} buckets SEC(".maps");
+
+SEC("xdp")
+int xdp_token_bucket_guard(struct xdp_md *ctx) {
+    void *data     = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
+
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end)
+        return XDP_PASS;
+    if (eth->h_proto != __bpf_htons(0x0800))
+        return XDP_PASS;
+
+    struct iphdr *ip = (void *)(eth + 1);
+    if ((void *)(ip + 1) > data_end)
+        return XDP_PASS;
+
+    __u32 src_ip = ip->saddr;
+    // IMPORTANT: Call helper BEFORE acquiring bpf_spin_lock!
+    __u64 now = bpf_ktime_get_ns();
+
+    struct token_bucket *b = bpf_map_lookup_elem(&buckets, &src_ip);
+    if (!b)
+        return XDP_PASS;
+
+    __u32 action = XDP_PASS;
+
+    bpf_spin_lock(&b->lock);
+    __u64 elapsed = now - b->last_ts_ns;
+    __u64 refill  = elapsed / 1000000; // 1 token per ms
+    if (refill > 0) {
+        b->tokens += refill;
+        if (b->tokens > 100)
+            b->tokens = 100;
+        b->last_ts_ns = now;
+    }
+    if (b->tokens > 0) {
+        b->tokens--;
+    } else {
+        action = XDP_DROP;
+    }
+    bpf_spin_unlock(&b->lock);
+
+    return action;
+}
+
+char LICENSE[] SEC("license") = "GPL";`,
+    goFileName: 'main.go',
+    goCode: `package main
+
+import (
+	"log"
+	"net"
+
+	"github.com/cilium/ebpf/link"
+)
+
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go bpf spinlock_ratelimit.bpf.c
+
+func main() {
+	var objs bpfObjects
+	// BTF map value containing struct bpf_spin_lock is verified at load time
+	if err := loadBpfObjects(&objs, nil); err != nil {
+		log.Fatalf("loading spinlock program: %v", err)
+	}
+	defer objs.Close()
+
+	iface, err := net.InterfaceByName("eth0")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	l, err := link.AttachXDP(link.XDPOptions{
+		Program:   objs.XdpTokenBucketGuard,
+		Interface: iface.Index,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer l.Close()
+
+	log.Println("Spinlock-protected XDP token bucket rate limiter active!")
+}`,
+    steps: [
+      {
+        stepNumber: 1,
+        title: 'Fetch Timestamp Before Entering Critical Section',
+        explanation:
+          'Because the Verifier forbids calling any BPF helper while holding a spinlock, we call bpf_ktime_get_ns() before calling bpf_spin_lock(&b->lock).',
+        activePipelineNode: 'verifier',
+        cHighlightLines: [34, 41],
+        goHighlightLines: [14, 18],
+        keyInsight: 'Never invoke bpf_ktime_get_ns() or bpf_printk() between bpf_spin_lock and bpf_spin_unlock!'
+      },
+      {
+        stepNumber: 2,
+        title: 'Atomic Multi-Field Refill & Decrement Under bpf_spin_lock',
+        explanation:
+          'Inside the critical section, we compute token refills, cap burst size at 100, decrement 1 token, and release the lock before returning action.',
+        activePipelineNode: 'map',
+        cHighlightLines: [43, 59],
+        goHighlightLines: [24, 31],
+        keyInsight: 'Store the verdict in a local variable (action) and return it only AFTER bpf_spin_unlock(&b->lock).'
+      }
+    ],
+    verifierChallenge: {
+      title: 'Fix Helper Call Inside bpf_spin_lock Critical Section',
+      prompt:
+        'Calling bpf_ktime_get_ns() or returning early while holding bpf_spin_lock(&b->lock) is immediately rejected by the eBPF Verifier to prevent kernel deadlocks!',
+      buggySnippet: `bpf_spin_lock(&b->lock);
+// BUG: Calling a BPF helper inside a bpf_spin_lock critical section is forbidden!
+__u64 now = bpf_ktime_get_ns();
+b->last_ts_ns = now;
+bpf_spin_unlock(&b->lock);`,
+      fixedSnippet: `__u64 now = bpf_ktime_get_ns(); // Call helper BEFORE locking
+bpf_spin_lock(&b->lock);
+b->last_ts_ns = now;
+bpf_spin_unlock(&b->lock);`,
+      verifierErrorOutput: `function calls are not allowed while holding a lock (insn 29: call bpf_ktime_get_ns#5)`,
+      verifierPassOutput: `bpf_spin_lock acquired at insn 28, released at insn 44
+safe — zero helper calls inside critical section`,
+      explanation:
+        'Pre-calculate all helper values (like timestamps or random numbers) in local variables prior to acquiring bpf_spin_lock.'
+    },
+    simulatorPresetId: 'preset-xdp-synflood'
   }
 ];
+

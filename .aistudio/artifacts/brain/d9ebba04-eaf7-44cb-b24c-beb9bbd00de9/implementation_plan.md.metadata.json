@@ -1,6 +1,6 @@
 {
-  "summary": "Comprehensive implementation plan for KernelPulse, an interactive eBPF learning platform and real-time kernel simulator emphasizing Go (cilium/ebpf) userspace loaders, a full simulated eBPF runtime (Verifier + BPF Maps Inspector + Animated Kernel Event Pipeline), progressive Beginner-to-Advanced tracing tutorials, and production-grade project templates across cloud-native networking, runtime security, and performance engineering.",
-  "updatedAt": "2026-10-14T03:33:31.347959874Z",
+  "summary": "Updated implementation plan expanding KernelPulse with an interactive Kernel Reference Hub (Traceable Linux Syscalls, BPF Helper Functions & Kfuncs, and eBPF C Macros & SEC() Directives), 6 new Concept Encyclopedia chapters (18 total), and 6 new step-by-step C + Go tutorials (21 total).",
+  "updatedAt": "2026-10-14T04:35:04.839576537Z",
   "requestFeedback": true,
   "userFacing": true
 }

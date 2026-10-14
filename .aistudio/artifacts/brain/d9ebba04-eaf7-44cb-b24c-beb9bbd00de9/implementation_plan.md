@@ -1,147 +1,79 @@
-# KernelPulse: Interactive eBPF Learning Studio & Kernel Event Simulator
+# KernelPulse Curriculum & Reference Expansion Plan: Linux Syscalls, BPF Helpers, Macros & Advanced Tracing
 
-KernelPulse is an interactive learning environment and simulated Linux kernel laboratory designed to take engineers from foundational eBPF mental models to writing production-grade cloud-native observability, networking, and security programs using C (kernel-side) and Go with `cilium/ebpf` (userspace).
-
-## User Review & Critical Decisions
-
-> [!IMPORTANT]
-> The following architectural and curriculum decisions incorporate your confirmed preferences from our planning discussion:
-
-- **Primary Userspace Loader Stack (`Go + cilium/ebpf`)**: All tutorials, interactive labs, and project templates default to modern **C (`vmlinux.h` / CO-RE BPF helpers)** paired with **Go (`cilium/ebpf` and `bpf2go`)** for userspace compilation, map pinning, ring buffer consumption, and lifecycle attachment. A secondary reference toggle is also included for C (`libbpf`) comparison when inspecting low-level syscalls.
-- **Full Simulated eBPF Runtime**: The interactive workspace includes an in-browser **eBPF Static Verifier Engine** (diagnosing unbounded loops, uninitialized registers, null map pointer dereferences, and stack frame limits), an interactive **BPF Maps & RingBuffer Inspector** (Hash, Per-CPU Array, RingBuf, LPM Trie), and a **Live Kernel Event Pipeline** where users can inject synthetic workloads (HTTP requests, SYN floods, `execve` bursts, memory allocations, TCP retransmits) and observe packet/syscall traversal in real time.
-- **Comprehensive Real-World Project Templates**: Includes complete, modifiable starter architectures across all three priority domains:
-  1. *Cloud-Native Networking*: Cilium-style XDP High-Speed Packet Filter & L4 Load Balancer
-  2. *Runtime Security Auditing*: Falco/Tetragon-style Privileged Syscall & File Integrity Monitor (`LSM` + `tracepoint/syscalls/sys_enter_execve`)
-  3. *Performance Engineering*: TCP Connection Latency Histogram (`kprobe`/`kretprobe`), Off-CPU Scheduler Profiler (`sched_switch`), and Heap Allocation Leak Tracker (`uprobe`).
+This plan expands **KernelPulse** into an all-in-one eBPF reference and learning encyclopedia by introducing an interactive **Syscalls, BPF Helpers & Macros Reference Explorer** alongside **6 new Concept Encyclopedia chapters** (bringing the total to 18 chapters) and **6 new step-by-step C + Go (`cilium/ebpf`) tutorials** (bringing the total to 21 hands-on labs).
 
 ---
 
-## 1. Overview & Core Concept
+## 1. Interactive Kernel Reference Explorer (Syscalls, BPF Helpers & C Macros)
 
-- **What It Does**: Combines a structured, progressive eBPF curriculum (Beginner, Intermediate, Advanced) with a hands-on visual kernel sandbox. Learners can explore how eBPF programs traverse from userspace Go loaders through the `bpf()` syscall, pass static verification and JIT compilation, attach to kernel hook points (XDP, TC, kprobes, tracepoints, uprobes, LSM), and stream structured telemetry back to Go routines via BPF Maps and Ring Buffers.
-- **Target Audience / Persona**: Systems engineers, cloud-native/Kubernetes developers, SREs, and security engineers who want an intuitive, visual way to master eBPF without needing to provision custom Linux VMs or risk crashing a local kernel while learning verifier constraints.
-- **Key Value**: Bridges the gap between static documentation and real kernel behavior by making invisible kernel constructs—such as register state tracking inside the eBPF Verifier, per-CPU map mutations, and hook execution order—directly visible and interactive.
+We will add a dedicated, searchable **Reference Explorer** (accessible directly from the navigation bar and cross-linked from Concepts and Tutorials) organized into three deep-dive technical catalogs:
 
----
+### A. Traceable Linux System Calls Catalog (20+ High-Value Syscalls)
+Organized by kernel subsystem (**Process & Execution**, **Filesystem & VFS**, **Network & Sockets**, **Memory, Privilege & Security**):
+- **Process & Execution**: `execve`, `execveat`, `clone3`, `fork`, `exit_group`, `ptrace`, `prctl`
+- **Filesystem & VFS**: `openat`, `openat2`, `read`, `write`, `unlinkat`, `renameat2`, `memfd_create`, `fchmodat`
+- **Networking & Sockets**: `socket`, `connect`, `accept4`, `bind`, `sendto`, `recvfrom`, `setsockopt`
+- **Memory & Privilege Escalation**: `mmap`, `mprotect`, `bpf`, `setuid`, `capset`, `init_module`, `mount`
 
-## 2. User Experience & Visual Design
+**Every syscall reference card includes**:
+1. **Hook Attachment Paths**: Exact `SEC("tracepoint/syscalls/sys_enter_<name>")`, `SEC("tracepoint/syscalls/sys_exit_<name>")`, `SEC("fentry/__x64_sys_<name>")`, and recommended **BPF LSM** alternative when blocking or TOCTOU safety is required.
+2. **Kernel Context & Argument Layout**: Exact fields inside `struct trace_event_raw_sys_enter` (`ctx->args[0..5]`), including which arguments are **user-space pointers (`__user char *`)** vs. scalar values/file descriptors.
+3. **Pointer & Verifier Rules**: Explicit guidance on why `bpf_probe_read_user_str()` or `bpf_probe_read_user()` must be used for syscall pointer arguments, how to handle page faults safely, and how to correlate `sys_enter` arguments with `sys_exit` return codes (`ret`) using a PID/TID-keyed hash map.
+4. **Copyable C + Go (`cilium/ebpf`) Snippet**: Ready-to-use kernel `.bpf.c` probe and Go `link.Tracepoint("syscalls", "sys_enter_*", ...)` loader code.
 
-### Key User Flows
+### B. BPF Helper Functions & Modern Kfuncs Catalog (25+ Core Helpers)
+Organized by functional domain (**Process & Task Context**, **Memory & Pointer Probing**, **BPF Map Operations**, **RingBuffer & Events**, **Networking & Packet Manipulation**, **Timers, Locks & Security Enforcement**):
+- **Context & Identity**: `bpf_get_current_pid_tgid()`, `bpf_get_current_uid_gid()`, `bpf_get_current_comm()`, `bpf_get_current_task_btf()`, `bpf_get_Current_cgroup_id()`, `bpf_get_smp_processor_id()`, `bpf_ktime_get_ns()`
+- **Memory Probing & CO-RE**: `bpf_probe_read_kernel()`, `bpf_probe_read_kernel_str()`, `bpf_probe_read_user()`, `bpf_probe_read_user_str()`, `bpf_copy_from_user()` (sleepable `.s` programs)
+- **Map & State Management**: `bpf_map_lookup_elem()`, `bpf_map_update_elem()`, `bpf_map_delete_elem()`, `bpf_for_each_map_elem()`
+- **RingBuffer & Telemetry**: `bpf_ringbuf_reserve()`, `bpf_ringbuf_submit()`, `bpf_ringbuf_discard()`, `bpf_ringbuf_output()`, `bpf_printk()`
+- **Packet, Socket & Control Flow**: `bpf_xdp_adjust_head()`, `bpf_redirect_map()`, `bpf_skb_load_bytes()`, `bpf_sock_hash_update()`, `bpf_tail_call()`, `bpf_d_path()`, `bpf_send_signal()`, `bpf_timer_init()`
+- **Modern BTF Kfuncs**: `bpf_rdonly_cast()`, `bpf_task_acquire()`, `bpf_task_release()`, `bpf_dynptr_from_mem()`
 
-1. **Concept & Architecture Explorer (`Concepts & Flows`)**:
-   - Users explore the interactive **Linux Kernel vs. User Space Architecture Canvas**.
-   - Clicking any subsystem node (**`bpf()` Syscall**, **eBPF Verifier**, **JIT Compiler**, **Hook Points: XDP / TC / Kprobe / Tracepoint / Uprobe / LSM**, **BPF Maps & Ring Buffers**, **Go `cilium/ebpf` Loader**) highlights its data pathways, shows exact memory/execution constraints, and animates a step-by-step packet or syscall walkthrough.
-2. **Progressive Tracing Curriculum (`Tutorials: Beginner → Mid-Level → Advanced`)**:
-   - Users select a skill tier and step through guided, interactive labs:
-     - **Beginner**: *01. Hello World Syscall Tracer (`tracepoint/syscalls/sys_enter_execve`)*, *02. High-Speed Packet Counter with XDP (`XDP_PASS` / `XDP_DROP`)*, *03. Sharing State with BPF Hash Maps & Go (`cilium/ebpf.Map`)*.
-     - **Mid-Level**: *04. TCP Handshake Latency Histogram (`kprobe/tcp_v4_connect` & `kretprobe`)*, *05. Streaming High-Volume Telemetry with `BPF_MAP_TYPE_RINGBUF`*, *06. Traffic Control (`tc`) Egress Rate Limiting & QoS Marking*.
-     - **Advanced**: *07. CO-RE (Compile Once – Run Everywhere) & `BPF_CORE_READ` Navigation*, *08. Userspace TLS/HTTP Plaintext Interception (`uprobe/SSL_write`)*, *09. Container Escape & File Access Prevention with BPF LSM Hooks*.
-   - Each tutorial features step-by-step interactive checkpoints, bidirectional highlighting between C/Go code lines and kernel diagram nodes, and a "Load in Simulator" action.
-3. **Interactive eBPF Simulator & Playground (`Kernel Simulator`)**:
-   - **Two-Zone Sandbox Layout**:
-     - *Left / Top Stage (65% width)*: Live **Animated Kernel Event Pipeline** + **Dual-Pane Code Editor** (Kernel C code `.bpf.c` alongside Userspace Go `main.go` using `cilium/ebpf`) with interactive line annotations and bug-injection toggles to test how the verifier catches unsafe code.
-     - *Right / Bottom Control & Telemetry Deck (35% width)*: **Workload Traffic Generator** (trigger HTTP bursts, SSH brute-force attempts, SYN floods, `fork`/`exec` trees, or `malloc` spikes), **eBPF Verifier Output Log** (showing register bounds `R0–R10`, instruction count, and pass/fail diagnostics), and live **BPF Map & RingBuffer Inspector** with tabular hex/struct decoding and latency histograms.
-4. **Real-World Project Templates (`Project Templates`)**:
-   - Filterable catalog across **Cloud-Native Networking**, **Runtime Security**, and **Performance Engineering**.
-   - Each template provides a complete multi-file architecture viewer (`bpf/program.c`, `main.go`, `Makefile`, `Dockerfile`), an architecture data-flow diagram, production deployment checklist, and one-click launch into the live Kernel Simulator with pre-configured traffic scenarios.
+**Every helper entry includes**:
+1. **Exact C Signature & Register ABI**: Input registers (`R1–R5`) and return value (`R0`).
+2. **Verifier Contract**: Mandatory safety checks required by the static verifier (e.g., `if (!ptr) return 0;` after `bpf_map_lookup_elem` or `bpf_ringbuf_reserve`, or balancing `bpf_ringbuf_submit`/`bpf_ringbuf_discard` across all branch paths).
+3. **Program Type Compatibility & Min Kernel Version**: Matrix showing which hooks (`XDP`, `TC`, `kprobe`, `tracepoint`, `fentry`, `lsm`) permit the helper.
+4. **What / How / Why Comparison**: E.g., why use `bpf_probe_read_user_str()` instead of `bpf_probe_read_kernel_str()`, or why use `bpf_ringbuf_reserve()` + `bpf_ringbuf_submit()` instead of `bpf_ringbuf_output()`.
 
-### Visual Identity & Theme
+### C. eBPF C Macros, `SEC()` Directives & BTF Annotations Reference (20+ Macros)
+A complete reference decoding the macros from `<bpf/bpf_helpers.h>`, `<bpf/bpf_tracing.h>`, and `<bpf/bpf_core_read.h>`:
+- **Section & Hook Macros**: `SEC("...")` table mapping every section prefix (`xdp`, `tc`, `kprobe/`, `kretprobe/`, `fentry/`, `fexit/`, `tp/`, `tracepoint/`, `uprobe/`, `lsm/`, `cgroup/skb`, `cgroup/connect4`, `iter/task`) to its context struct and Go `cilium/ebpf/link` attachment function.
+- **CO-RE & Struct Reading Macros**: `BPF_CORE_READ()`, `BPF_CORE_READ_INTO()`, `BPF_CORE_READ_STR_INTO()`, `BPF_CORE_READ_USER()`, `BPF_CORE_READ_BITFIELD_PROBED()`.
+- **Calling Convention & Trampoline Macros**: `BPF_KPROBE()`, `BPF_KRETPROBE()`, `BPF_PROG()`, `PT_REGS_PARM1..5()`, `PT_REGS_RC()`.
+- **BTF Map Definition & Compiler Macros**: `__uint(type, ...)`, `__uint(max_entries, ...)`, `__type(key, ...)`, `__type(value, ...)`, `__array(...)`, `__always_inline`, `bpf_printk()`.
 
-- **Aesthetic Direction**: High-precision systems engineering workbench paired with an interactive educational sandbox—clean dark slate geometry, crisp technical diagrams, and high-contrast semantic signal paths without decorative clutter.
-- **Color Palette & 60-30-10 Discipline**:
-  - **60% Dominant Canvas (`--background`)**: Deep carbon slate (`#0B0F17`) for the main workspace canvas, reducing eye strain during code and trace inspection.
-  - **30% Structural Surfaces (`--surface`)**: Elevated slate panels (`#111827`) with subtle 1px hairline borders (`#1E293B`), crisp primary text (`#F8FAFC`), and muted secondary prose (`#94A3B8`).
-  - **10% Semantic Focal Accents**:
-    - *Kernel Space / eBPF Execution*: Electric Cyan (`#0EA5E9`) paired with explicit `[KERNEL]` or `● VERIFIED` text labels.
-    - *User Space / Go `cilium/ebpf`*: Vibrant Amber (`#F59E0B`) paired with `[USERSPACE]` labels.
-    - *Pass / `XDP_PASS` / Safe Verification*: Emerald (`#10B981`) with `✓ PASS` label.
-    - *Drop / Alert / `XDP_DROP` / Verifier Rejection*: Coral Crimson (`#EF4444`) with `✕ DROP / REJECT` label.
-- **Typography & Hierarchy (2+1 Font Rule)**:
-  - *Display & Section Headings*: `Outfit` (SemiBold 600, tight tracking, `text-wrap: balance`).
-  - *Body & Pedagogical Prose*: `Plus Jakarta Sans` (Regular 400 / Medium 500, 15px–16px, generous 1.65 line-height for readability).
-  - *Code, Registers, Hex & Telemetry*: `JetBrains Mono` with strict `font-variant-numeric: tabular-nums` so all packet counters, nanosecond latency histograms, memory addresses, and PIDs align vertically without jitter.
-- **Top Bar Contract & Component Discipline**:
-  - **Strict 3-Zone Top Bar**: Zone 1: Single-line brand wordmark (`KernelPulse`); Zone 2: 4 concise single-line navigation links (`Concepts & Flows`, `Tutorials`, `Kernel Simulator`, `Project Templates`); Zone 3: 1 primary action button (`Launch Simulator` / `Run Verifier & Attach`).
-  - **Zero-Pill Metadata**: Tutorial difficulty tiers, hook types, and kernel version requirements are rendered as clean, unboxed inline text separated by middle dots (`Beginner · Tracepoint · Go cilium/ebpf · 10 min`) rather than pill badges.
-  - **Single-Elevation Depth**: Flat slate surfaces separated by 1px borders (`border-slate-800`) and generous padding; no nested card sandwiches or thick left accent borders.
+**Every macro entry includes**:
+1. **Under-the-Hood Expansion**: Side-by-side comparison showing the clean macro call vs. the raw compiler attributes / nested `bpf_probe_read_kernel()` calls it expands into.
+2. **Why We Use It**: How it prevents architecture-specific register bugs (`x86_64` vs `arm64`) and enables BTF CO-RE field relocations.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
+## 2. Expanded Concept Encyclopedia (12 → 18 Deep-Dive Chapters)
 
-- **Decision 1: Deterministic In-Browser eBPF Verifier & Event Engine vs. Static Code Snippets**
-  - *Chosen Approach*: Build a deterministic client-side eBPF simulation engine that parses code mutations (including deliberate bug toggles such as removing a `if (data + sizeof(struct ethhdr) > data_end)` packet bounds check or omitting a null-check after `bpf_map_lookup_elem`) and generates authentic Linux verifier register state traces (`R1=ctx()`, `R2=pkt_end()`, `invalid access to packet, off=14 size=20`).
-  - *Why*: Beginning and mid-level eBPF developers struggle most with understanding why the kernel verifier rejects their programs. Experiencing real verifier errors and fixing them interactively builds immediate muscle memory.
-  - *Alternatives Considered*: Static pre-recorded screenshots of terminal output, which fail to let learners experiment with failure modes or adjust synthetic workloads.
+We will add **6 new comprehensive chapters** to `CONCEPT_TOPICS`, each featuring **"1. What is X?"**, **"2. How X Works Under the Hood"** (with step-by-step lifecycle & code), **"3. Why Use X Instead of Y?"** (with quantitative comparison tables), and an **Interactive Comprehension Check**:
 
-- **Decision 2: Go (`cilium/ebpf`) as the First-Class Userspace Language**
-  - *Chosen Approach*: Every kernel C program is paired side-by-side with idiomatic Go code using `github.com/cilium/ebpf`, `ebpf/link`, and `ebpf/ringbuf`, showing how `bpf2go` generates Go structs and how Go channels consume kernel events.
-  - *Why*: Directly aligns with your cloud-native focus (Kubernetes, Cilium, Tetragon, Pixie) where Go is the industry standard for control-plane loaders.
-
-- **Decision 3: Local Persistence for Curriculum Progress & Custom Sandbox Snapshots**
-  - *Chosen Approach*: Persist completed tutorial checkpoints, quiz/verifier challenge completions, and user-modified playground code in `localStorage` with a one-click reset option.
-  - *Why*: Ensures zero-configuration instant startup while preserving the learner's progress across sessions.
+- **Chapter 13: `fentry` & `fexit` BTF Trampolines** — Why `fentry`/`fexit` with `BPF_PROG` achieves 5–10x lower overhead than `kprobe`/`kretprobe` and gives `fexit` access to both input arguments and the return value simultaneously.
+- **Chapter 14: User-Space vs. Kernel-Space Memory Addressing in eBPF** — Virtual memory spaces, SMAP/SMEP hardware protections, page faults on swapped user pages, sleepable (`fentry.s` / `uprobe.s`) programs, and why mixing `bpf_probe_read_user` and `bpf_probe_read_kernel` fails.
+- **Chapter 15: Linux System Call Internals & Syscall Tracing Strategies** — How a userspace `syscall` instruction transitions into `do_syscall_64`, why raw `kprobe/__x64_sys_*` breaks due to `pt_regs` wrapper indirection, and when to choose `tracepoint/syscalls/sys_enter_*` vs. `fentry` vs. `BPF LSM`.
+- **Chapter 16: BPF Helper Functions vs. Kernel Kfuncs** — How the 5-argument register calling convention (`R1–R5`) works, why Linux froze traditional UAPI helpers (`enum bpf_func_id`), and how modern BTF `kfuncs` expose extensible kernel capabilities.
+- **Chapter 17: Concurrency, Atomics, Spinlocks & Timers in eBPF** — Handling multi-core race conditions on shared BPF maps: when to use Per-CPU maps vs. `__sync_fetch_and_add` vs. `struct bpf_spin_lock`, and how `struct bpf_timer` runs periodic background GC inside the kernel.
+- **Chapter 18: Cgroup v2 eBPF Hooks for Container Networking & Governance** — Attaching eBPF programs to Kubernetes pod cgroups (`cgroup/skb`, `cgroup/connect4`, `cgroup/sockops`) to transparently rewrite destination IPs (kube-proxy replacement) and enforce per-container socket policies.
 
 ---
 
-## 4. Technical Architecture & Data Strategy
+## 3. Expanded Step-by-Step Tracing Curriculum (15 → 21 Labs)
 
-### Architecture & Component Diagram
+We will expand `TUTORIAL_LESSONS` from 15 to **21 guided C + Go (`cilium/ebpf`) labs** (7 Beginner, 7 Mid-Level, 7 Advanced), each with a Concept Read-Through, synchronized C/Go checkpoint walkthroughs, and a hands-on Verifier diagnostic challenge:
 
-```
-┌──────────────────────────────────────────────────────────────────────────────────────┐
-│                         Top Navigation Bar (3-Zone Contract)                         │
-│   [KernelPulse]        [Concepts · Tutorials · Simulator · Templates]   [Run Probe]  │
-└──────────────────────────────────────────┬───────────────────────────────────────────┘
-                                           │
-        ┌──────────────────────────────────┼───────────────────────────────────┐
-        ▼                                  ▼                                   ▼
-┌───────────────────────┐      ┌────────────────────────┐      ┌───────────────────────┐
-│   Concepts & Flows    │      │  Step-by-Step Labs     │      │   Project Templates   │
-│  Interactive Explorer │      │ (Beginner/Mid/Advanced)│      │   (Network/Sec/Perf)  │
-├───────────────────────┤      ├────────────────────────┤      ├───────────────────────┤
-│ • User/Kernel Split   │      │ • Skill Tier Switcher  │      │ • Domain Filter Bar   │
-│ • Hook Point Pipeline │─────▶│ • Guided Checkpoints   │─────▶│ • Multi-File Viewer   │
-│ • Helper & Map Matrix │      │ • C + Go Code Pairings │      │   (.bpf.c + main.go)  │
-│ • Step Flow Animator  │      │ • Verifier Challenges  │      │ • "Open in Simulator" │
-└───────────────────────┘      └───────────┬────────────┘      └───────────┬───────────┘
-                                           │                               │
-                                           └───────────────┬───────────────┘
-                                                           ▼
-┌──────────────────────────────────────────────────────────────────────────────────────┐
-│                   Two-Zone Interactive eBPF Kernel Simulator                         │
-├──────────────────────────────────────────┬───────────────────────────────────────────┤
-│   Left Stage (65%): Code & Visual Flow   │  Right Deck (35%): Control & Telemetry    │
-│ ┌──────────────────────────────────────┐ │ ┌───────────────────────────────────────┐ │
-│ │ Live Kernel Event Pipeline Canvas    │ │ │ Synthetic Workload Generator          │ │
-│ │ [NIC/Syscall]─▶[Hook]─▶[Map/RingBuf] │ │ │ (HTTP, SYN Flood, Execve, Malloc)     │ │
-│ └──────────────────────────────────────┘ │ └───────────────────────────────────────┘ │
-│ ┌──────────────────────────────────────┐ │ ┌───────────────────────────────────────┐ │
-│ │ Dual Code Editor & Bug Toggle Studio │ │ │ eBPF Static Verifier Diagnostic Log   │ │
-│ │ • Kernel C (.bpf.c)  • Go (cilium)   │ │ │ (Register State R0-R10 & Safety Pass) │ │
-│ │ • Interactive Line-to-Flow Binding   │ │ └───────────────────────────────────────┘ │
-│ │ • Safety Check Toggles (Bounds/Null) │ │ ┌───────────────────────────────────────┐ │
-│ └──────────────────────────────────────┘ │ │ Live BPF Maps & RingBuffer Inspector  │ │
-│                                          │ │ (Hash Table, Latency Histogram, Logs) │ │
-│                                          │ └───────────────────────────────────────┘ │
-└──────────────────────────────────────────┴───────────────────────────────────────────┘
-```
+### New Beginner Labs
+- **Lab 06: Tracing File Opens & Deletions (`sys_enter_openat2` & `sys_enter_unlinkat`)** — Reading `__user` filename strings safely with `bpf_probe_read_user_str()` and correlating `sys_enter` with `sys_exit` file descriptors.
+- **Lab 07: Mastering `BPF_KPROBE` & `BPF_CORE_READ` Macros (Process Ancestry Tracker)** — Walking `task_struct->real_parent->real_parent` pointer chains in a single CO-RE macro call to detect suspicious shell spawns (e.g., `nginx -> sh -> curl`).
 
-### Data Model & State
+### New Mid-Level Labs
+- **Lab 13: Zero-Overhead Function Latency with `fentry` & `fexit` Trampolines** — Replacing `kprobe` + `kretprobe` hash-map correlation with `SEC("fexit/tcp_v4_connect")` and `BPF_PROG` to access both input `struct sock *` and return `int ret` in a single hook.
+- **Lab 14: Container-Aware Socket Load Balancing with `cgroup/connect4`** — Using `SEC("cgroup/connect4")` and `link.AttachCgroup` in Go to intercept outbound `connect()` calls at the socket layer before a single SYN packet is generated.
 
-- **Curriculum & Tutorial Store**:
-  - Contains structured lessons across three difficulty levels (`beginner`, `intermediate`, `advanced`).
-  - Each lesson includes conceptual overview, hook lifecycle diagrams, annotated C kernel code, annotated Go (`cilium/ebpf`) userspace code, line-by-line cross-references, and an interactive Verifier Challenge (where learners toggle or fix a bug to make verification pass).
-- **Simulator Runtime State**:
-  - `activeProgram`: Currently loaded eBPF program definition, hook attachment point (`XDP`, `TC`, `kprobe`, `kretprobe`, `tracepoint`, `uprobe`, `lsm`), and active safety check flags (`packetBoundsCheck`, `nullMapPointerCheck`, `boundedLoopCheck`, `stackSizeLimitCheck`).
-  - `verifierState`: Computed verification log lines, register states (`R0` through `R10`), instruction count, stack bytes used (`max 512 bytes`), and status (`VERIFIED_SAFE` vs. `REJECTED_UNSAFE`).
-  - `kernelEventStream`: Real-time ring buffer and perf event queue populated by either the automated workload generator or manual single-step event triggers, tracking packet verdicts (`XDP_PASS`, `XDP_DROP`, `XDP_TX`), syscall arguments, PID/COMM metadata, and execution latency in nanoseconds.
-  - `bpfMapEntries`: Live key-value state for simulated `BPF_MAP_TYPE_HASH`, `BPF_MAP_TYPE_PERCPU_ARRAY`, and latency histogram buckets (`log2` microsecond slots).
-- **Project Templates Catalog**:
-  - 6 comprehensive real-world templates spanning Networking (XDP L4 DDoS Scrubber, Cilium-style Socket Load Balancer), Security (Falco-style `execve` + File Open Auditor, BPF LSM Container Breakout Blocker), and Performance (TCP RTT & Retransmit Tracer, Off-CPU Flame/Histogram & Memory Leak Profiler).
-
-### Interactive Component & State Mapping
-
-- **Concept Flow Animator**: Clicking any stage in the eBPF lifecycle (`Go Loader` → `bpf(BPF_PROG_LOAD)` → `Verifier` → `JIT` → `Kernel Hook` → `BPF Map` → `Go RingBuf Reader`) steps the visual state machine forward or backward and updates the technical inspector panel with exact struct definitions and register conventions.
-- **Interactive Verifier Safety Toggles**: In the Simulator and Tutorials, toggling safety switches (e.g., *"Omit `data + nh_off > data_end` check"* or *"Dereference map pointer without `if (!val) return 0;`"* ) dynamically mutates the C code in the editor, re-runs the simulated verifier, highlights the offending C line and bytecode instruction in crimson, and blocks kernel attachment until fixed.
-- **Workload Generator & Playback Controls**: Users can toggle continuous event streaming (`Play` / `Pause`), step through a single kernel event frame-by-frame (`Step Event`), adjust packet/syscall rate sliders (`10 ev/s` to `1,000 ev/s`), or inject specific anomaly bursts (`Inject SYN Flood`, `Simulate Unauthorized /etc/shadow Read`, `Trigger TCP Retransmit Spike`) and watch the BPF maps and Go userspace output update immediately.
+### New Advanced Labs
+- **Lab 20: Detecting Fileless Malware (`memfd_create` + `execveat` + `mprotect` RWX)** — Multi-syscall security correlation detecting in-memory ELF execution (`memfd_create` anonymous file descriptors executed via `execveat` or `mprotect(PROT_READ|PROT_WRITE|PROT_EXEC)`).
+- **Lab 21: In-Kernel Sliding-Window Rate Limiter with `bpf_spin_lock` & `bpf_timer`** — Building a thread-safe token bucket inside a shared BPF map using `bpf_spin_lock` and scheduling automatic bucket refills with `bpf_timer_init()` and `bpf_timer_set_callback()`.
