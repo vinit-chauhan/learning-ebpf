@@ -13,7 +13,8 @@ import {
   BookOpen,
   GraduationCap,
   Terminal,
-  Cpu
+  Cpu,
+  ChevronDown
 } from 'lucide-react';
 import { ConceptExplorerView } from './components/ConceptExplorerView';
 import { TutorialsView } from './components/TutorialsView';
@@ -105,15 +106,15 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const navItems: { id: ActiveSection; label: string; badge?: string }[] = [
-    { id: 'concepts', label: 'Concepts & Flows', badge: String(CONCEPT_TOPICS.length) },
-    { id: 'tutorials', label: 'Tutorials', badge: String(TUTORIAL_LESSONS.length) },
-    { id: 'syscalls', label: 'Linux Syscalls', badge: String(TRACEABLE_SYSCALLS.length) },
-    { id: 'helpers', label: 'BPF Helpers & Kfuncs', badge: String(BPF_HELPERS_CATALOG.length) },
-    { id: 'macros', label: 'eBPF Macros & SEC()', badge: String(EBPF_MACROS_CATALOG.length) },
-    { id: 'simulator', label: 'Kernel Simulator' },
-    { id: 'templates', label: 'Project Templates', badge: '6' }
-  ];
+  const sectionLabels: Record<ActiveSection, string> = {
+    concepts: 'Concepts & Flows',
+    tutorials: 'Tutorials',
+    syscalls: 'Linux Syscalls',
+    helpers: 'BPF Helpers & Kfuncs',
+    macros: 'eBPF Macros & SEC()',
+    simulator: 'Kernel Simulator',
+    templates: 'Project Templates'
+  };
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#0B0F17] text-slate-900 dark:text-slate-100 transition-colors pb-16 md:pb-0">
@@ -135,18 +136,18 @@ export default function App() {
       />
 
       {/* Top Header Bar */}
-      <header className="sticky top-0 z-30 flex items-center justify-between gap-2 sm:gap-4 px-3 sm:px-6 py-2.5 sm:py-3.5 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-[#0B0F17]/95 backdrop-blur-xs">
-        {/* Left Slot: Hamburger Button (active in BOTH mobile and desktop) + Wordmark */}
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-3 px-3 sm:px-6 py-2.5 sm:py-3.5 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-[#0B0F17]/95 backdrop-blur-xs">
+        {/* Left Slot: Hamburger Button (active in BOTH mobile and desktop) + Wordmark + Current Active Tab */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <button
             type="button"
             onClick={() => setIsNavDrawerOpen(true)}
             aria-label="Open tabs navigation menu"
-            className="min-h-[44px] min-w-[44px] px-2.5 py-1.5 flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 hover:text-sky-600 dark:hover:text-sky-400 hover:border-sky-500/40 hover:bg-sky-500/10 transition-colors cursor-pointer"
+            className="min-h-[44px] px-3 py-1.5 flex items-center justify-center gap-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 hover:text-sky-600 dark:hover:text-sky-400 hover:border-sky-500/40 hover:bg-sky-500/10 transition-colors cursor-pointer"
             title="Open Menu (All Tabs & Curriculum)"
           >
             <Menu className="w-5 h-5 shrink-0" />
-            <span className="text-xs font-mono font-medium hidden sm:inline">Menu</span>
+            <span className="text-xs font-mono font-medium">Tabs</span>
           </button>
 
           <a
@@ -155,49 +156,27 @@ export default function App() {
               e.preventDefault();
               setActiveSection('concepts');
             }}
-            className="text-base sm:text-lg font-bold tracking-tight text-slate-900 dark:text-white font-display whitespace-nowrap shrink-0"
+            className="text-base sm:text-lg font-bold tracking-tight text-slate-900 dark:text-white font-display whitespace-nowrap shrink-0 hover:text-sky-600 dark:hover:text-sky-400 transition-colors"
           >
             KernelPulse
           </a>
+
+          {/* Current Active Section Badge (click to open hamburger drawer) */}
+          <div className="flex items-center gap-1.5 pl-2 sm:pl-3 border-l border-slate-200 dark:border-slate-800">
+            <button
+              type="button"
+              onClick={() => setIsNavDrawerOpen(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono font-medium rounded-md bg-sky-50 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400 border border-sky-200 dark:border-sky-800/60 hover:bg-sky-100 dark:hover:bg-sky-900/40 cursor-pointer transition-colors"
+              title="Click to view all tabs"
+            >
+              <span className="max-w-[120px] sm:max-w-none truncate">{sectionLabels[activeSection]}</span>
+              <ChevronDown className="w-3.5 h-3.5 opacity-60 shrink-0" />
+            </button>
+          </div>
         </div>
 
-        {/* Center Slot: Horizontal scrollable tab list for quick switching */}
-        <nav
-          aria-label="Quick section navigation"
-          className="flex items-center gap-1 sm:gap-1.5 text-xs sm:text-sm font-medium text-slate-600 dark:text-slate-300 overflow-x-auto py-1 scrollbar-none"
-        >
-          {navItems.map((item) => {
-            const isActive = activeSection === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setActiveSection(item.id)}
-                className={`min-h-[38px] px-2.5 py-1 rounded-md transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer text-xs ${
-                  isActive
-                    ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400 font-semibold border border-sky-500/40'
-                    : 'hover:text-slate-900 dark:hover:text-white hover:bg-slate-200/50 dark:hover:bg-slate-800/60 border border-transparent'
-                }`}
-              >
-                <span>{item.label}</span>
-                {item.badge && (
-                  <span
-                    className={`px-1.5 py-0.2 text-[10px] font-mono rounded ${
-                      isActive
-                        ? 'bg-sky-500/20 text-sky-600 dark:text-sky-300'
-                        : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
-                    }`}
-                  >
-                    {item.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
-
         {/* Right Slot: Quick actions (Theme switch & Simulator launch) */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={() => setIsDarkMode(!isDarkMode)}
@@ -211,7 +190,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveSection('simulator')}
-            className="hidden lg:flex min-h-[44px] items-center px-3.5 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="hidden sm:flex min-h-[44px] items-center px-3.5 py-2 text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-xs"
           >
             Launch Simulator
           </button>
