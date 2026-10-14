@@ -7,9 +7,9 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies using clean install from lockfile
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 # Copy source files and configuration
 COPY . .
